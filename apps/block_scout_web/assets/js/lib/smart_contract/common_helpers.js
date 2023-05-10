@@ -74,7 +74,17 @@ function sanitizeMutipleInputValues (inputValueElements, inputType, inputCompone
 export function compareChainIDs (explorerChainId, walletChainIdHex) {
   if (explorerChainId !== parseInt(walletChainIdHex)) {
     const networkDisplayNameFromWallet = props.getNetworkDisplayName(walletChainIdHex)
-    const networkDisplayName = props.getNetworkDisplayName(explorerChainId)
+    let networkDisplayName
+    switch (explorerChainId) {
+      case 42:
+        networkDisplayName = 'LUKSO Mainnet'
+        break
+      case 4201:
+        networkDisplayName = 'LUKSO Testnet'
+        break
+      default:
+        networkDisplayName = props.getNetworkDisplayName(explorerChainId)
+    }
     const errorMsg = `You connected to ${networkDisplayNameFromWallet} chain in the wallet, but the current instance of Blockscout is for ${networkDisplayName} chain`
     return Promise.reject(new Error(errorMsg))
   } else {
