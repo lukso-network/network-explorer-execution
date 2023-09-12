@@ -92,7 +92,7 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
         "can_be_visualized_via_sol2uml" => false,
         "name" => target_contract && target_contract.name,
         "compiler_version" => target_contract.compiler_version,
-        "optimization_enabled" => if(target_contract.is_vyper_contract, do: nil, else: target_contract.optimization),
+        "optimization_enabled" => target_contract.optimization,
         "optimization_runs" => target_contract.optimization_runs,
         "evm_version" => target_contract.evm_version,
         "verified_at" => target_contract.inserted_at |> to_string() |> String.replace(" ", "T"),
@@ -109,7 +109,8 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
         "creation_bytecode" =>
           "0x608060405234801561001057600080fd5b5060df8061001f6000396000f3006080604052600436106049576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806360fe47b114604e5780636d4ce63c146078575b600080fd5b348015605957600080fd5b5060766004803603810190808035906020019092919050505060a0565b005b348015608357600080fd5b50608a60aa565b6040518082815260200191505060405180910390f35b8060008190555050565b600080549050905600a165627a7a7230582061b7676067d537e410bb704932a9984739a959416170ea17bda192ac1218d2790029",
         "abi" => target_contract.abi,
-        "is_verified_via_eth_bytecode_db" => target_contract.verified_via_eth_bytecode_db
+        "is_verified_via_eth_bytecode_db" => target_contract.verified_via_eth_bytecode_db,
+        "language" => smart_contract_language(target_contract)
       }
 
       request = get(conn, "/api/v2/smart-contracts/#{Address.checksum(target_contract.address_hash)}")
@@ -179,7 +180,7 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
         "can_be_visualized_via_sol2uml" => false,
         "name" => target_contract && target_contract.name,
         "compiler_version" => target_contract.compiler_version,
-        "optimization_enabled" => if(target_contract.is_vyper_contract, do: nil, else: target_contract.optimization),
+        "optimization_enabled" => target_contract.optimization,
         "optimization_runs" => target_contract.optimization_runs,
         "evm_version" => target_contract.evm_version,
         "verified_at" => target_contract.inserted_at |> to_string() |> String.replace(" ", "T"),
@@ -199,7 +200,8 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
         "creation_bytecode" =>
           "0x608060405234801561001057600080fd5b5060df8061001f6000396000f3006080604052600436106049576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806360fe47b114604e5780636d4ce63c146078575b600080fd5b348015605957600080fd5b5060766004803603810190808035906020019092919050505060a0565b005b348015608357600080fd5b50608a60aa565b6040518082815260200191505060405180910390f35b8060008190555050565b600080549050905600a165627a7a7230582061b7676067d537e410bb704932a9984739a959416170ea17bda192ac1218d2790029",
         "abi" => target_contract.abi,
-        "is_verified_via_eth_bytecode_db" => target_contract.verified_via_eth_bytecode_db
+        "is_verified_via_eth_bytecode_db" => target_contract.verified_via_eth_bytecode_db,
+        "language" => smart_contract_language(target_contract)
       }
 
       request = get(conn, "/api/v2/smart-contracts/#{Address.checksum(target_contract.address_hash)}")
@@ -275,7 +277,7 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
         "can_be_visualized_via_sol2uml" => false,
         "name" => target_contract && target_contract.name,
         "compiler_version" => target_contract.compiler_version,
-        "optimization_enabled" => if(target_contract.is_vyper_contract, do: nil, else: target_contract.optimization),
+        "optimization_enabled" => target_contract.optimization,
         "optimization_runs" => target_contract.optimization_runs,
         "evm_version" => target_contract.evm_version,
         "verified_at" => target_contract.inserted_at |> to_string() |> String.replace(" ", "T"),
@@ -292,7 +294,8 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
         "creation_bytecode" =>
           "0x608060405234801561001057600080fd5b5060df8061001f6000396000f3006080604052600436106049576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806360fe47b114604e5780636d4ce63c146078575b600080fd5b348015605957600080fd5b5060766004803603810190808035906020019092919050505060a0565b005b348015608357600080fd5b50608a60aa565b6040518082815260200191505060405180910390f35b8060008190555050565b600080549050905600a165627a7a7230582061b7676067d537e410bb704932a9984739a959416170ea17bda192ac1218d2790029",
         "abi" => target_contract.abi,
-        "is_verified_via_eth_bytecode_db" => target_contract.verified_via_eth_bytecode_db
+        "is_verified_via_eth_bytecode_db" => target_contract.verified_via_eth_bytecode_db,
+        "language" => smart_contract_language(target_contract)
       }
 
       request = get(conn, "/api/v2/smart-contracts/#{Address.checksum(address.hash)}")
@@ -697,6 +700,148 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
                "inputs" => [],
                "constant" => true,
                "method_id" => Base.encode16(id, case: :lower)
+             } in response
+    end
+
+    test "get correct bytes value 1", %{conn: conn} do
+      abi = [
+        %{
+          "inputs" => [],
+          "name" => "all_messages_hash",
+          "outputs" => [
+            %{
+              "internalType" => "bytes32",
+              "name" => "",
+              "type" => "bytes32"
+            }
+          ],
+          "stateMutability" => "view",
+          "type" => "function"
+        }
+      ]
+
+      id_1 =
+        abi
+        |> ABI.parse_specification()
+        |> Enum.at(0)
+        |> Map.fetch!(:method_id)
+
+      target_contract = insert(:smart_contract, abi: abi)
+      address_hash_string = to_string(target_contract.address_hash)
+
+      EthereumJSONRPC.Mox
+      |> expect(
+        :json_rpc,
+        fn [
+             %{
+               id: id,
+               method: "eth_call",
+               params: [
+                 %{data: "0x1dd69d06", to: ^address_hash_string},
+                 "latest"
+               ]
+             }
+           ],
+           _opts ->
+          {:ok,
+           [
+             %{
+               id: id,
+               jsonrpc: "2.0",
+               result: "0x0000000000000000000000000000000000000000000000000000000000000000"
+             }
+           ]}
+        end
+      )
+
+      request = get(conn, "/api/v2/smart-contracts/#{target_contract.address_hash}/methods-read")
+      assert response = json_response(request, 200)
+
+      assert %{
+               "inputs" => [],
+               "name" => "all_messages_hash",
+               "outputs" => [
+                 %{
+                   "value" => "0x0000000000000000000000000000000000000000000000000000000000000000",
+                   "type" => "bytes32"
+                 }
+               ],
+               "stateMutability" => "view",
+               "type" => "function",
+               "method_id" => Base.encode16(id_1, case: :lower),
+               "names" => ["bytes32"]
+             } in response
+    end
+
+    test "get correct bytes value 2", %{conn: conn} do
+      abi = [
+        %{
+          "inputs" => [],
+          "name" => "FRAUD_STRING",
+          "outputs" => [
+            %{
+              "internalType" => "bytes",
+              "name" => "",
+              "type" => "bytes"
+            }
+          ],
+          "stateMutability" => "view",
+          "type" => "function"
+        }
+      ]
+
+      id_2 =
+        abi
+        |> ABI.parse_specification()
+        |> Enum.at(0)
+        |> Map.fetch!(:method_id)
+
+      target_contract = insert(:smart_contract, abi: abi)
+      address_hash_string = to_string(target_contract.address_hash)
+
+      EthereumJSONRPC.Mox
+      |> expect(
+        :json_rpc,
+        fn [
+             %{
+               id: id,
+               method: "eth_call",
+               params: [
+                 %{data: "0x46b2eb9b", to: ^address_hash_string},
+                 "latest"
+               ]
+             }
+           ],
+           _opts ->
+          {:ok,
+           [
+             %{
+               id: id,
+               jsonrpc: "2.0",
+               result:
+                 "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000322d2d5468697320697320612062616420737472696e672e204e6f626f64792073617973207468697320737472696e672e2d2d0000000000000000000000000000"
+             }
+           ]}
+        end
+      )
+
+      request = get(conn, "/api/v2/smart-contracts/#{target_contract.address_hash}/methods-read")
+      assert response = json_response(request, 200)
+
+      assert %{
+               "inputs" => [],
+               "name" => "FRAUD_STRING",
+               "outputs" => [
+                 %{
+                   "value" =>
+                     "0x2d2d5468697320697320612062616420737472696e672e204e6f626f64792073617973207468697320737472696e672e2d2d",
+                   "type" => "bytes"
+                 }
+               ],
+               "stateMutability" => "view",
+               "type" => "function",
+               "method_id" => Base.encode16(id_2, case: :lower),
+               "names" => ["bytes"]
              } in response
     end
   end
@@ -1202,6 +1347,7 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
 
       assert [
                %{
+                 "method_id" => "49ba1b49",
                  "type" => "function",
                  "stateMutability" => "nonpayable",
                  "outputs" => [],
@@ -1268,7 +1414,8 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
                  "stateMutability" => "nonpayable",
                  "outputs" => [],
                  "name" => "disableWhitelist",
-                 "inputs" => [%{"type" => "bool", "name" => "disable", "internalType" => "bool"}]
+                 "inputs" => [%{"type" => "bool", "name" => "disable", "internalType" => "bool"}],
+                 "method_id" => "49ba1b49"
                }
              ] == response
     end
@@ -1909,7 +2056,8 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
                  "stateMutability" => "nonpayable",
                  "outputs" => [],
                  "name" => "disableWhitelist",
-                 "inputs" => [%{"type" => "bool", "name" => "disable", "internalType" => "bool"}]
+                 "inputs" => [%{"type" => "bool", "name" => "disable", "internalType" => "bool"}],
+                 "method_id" => "49ba1b49"
                }
              ] == response
     end
@@ -1963,8 +2111,7 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
   defp compare_item(%SmartContract{} = smart_contract, json) do
     assert smart_contract.compiler_version == json["compiler_version"]
 
-    assert if(smart_contract.is_vyper_contract, do: nil, else: smart_contract.optimization) ==
-             json["optimization_enabled"]
+    assert smart_contract.optimization == json["optimization_enabled"]
 
     assert json["language"] == if(smart_contract.is_vyper_contract, do: "vyper", else: "solidity")
     assert json["verified_at"]
@@ -1998,5 +2145,18 @@ defmodule BlockScoutWeb.API.V2.SmartContractControllerTest do
          ]}
       end
     )
+  end
+
+  defp smart_contract_language(smart_contract) do
+    cond do
+      smart_contract.is_vyper_contract ->
+        "vyper"
+
+      is_nil(smart_contract.abi) ->
+        "yul"
+
+      true ->
+        "solidity"
+    end
   end
 end

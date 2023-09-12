@@ -5,12 +5,12 @@ defmodule Indexer.Transform.TokenTransfers do
 
   require Logger
 
-  alias ABI.TypeDecoder
-  alias Explorer.{Chain, Repo}
-  alias Explorer.Chain.{Token, TokenTransfer}
-  alias Explorer.Token.MetadataRetriever
+  import Explorer.Chain.SmartContract, only: [burn_address_hash_string: 0]
 
-  @burn_address "0x0000000000000000000000000000000000000000"
+  alias ABI.TypeDecoder
+  alias Explorer.Repo
+  alias Explorer.Chain.{Token, TokenTransfer}
+  alias Indexer.Fetcher.TokenTotalSupplyUpdater
 
   @doc """
   Returns a list of token transfers given a list of logs.
@@ -51,13 +51,14 @@ defmodule Indexer.Transform.TokenTransfers do
 
     token_transfers
     |> Enum.filter(fn token_transfer ->
-      token_transfer.to_address_hash == @burn_address || token_transfer.from_address_hash == @burn_address
+      token_transfer.to_address_hash == burn_address_hash_string() ||
+        token_transfer.from_address_hash == burn_address_hash_string()
     end)
     |> Enum.map(fn token_transfer ->
       token_transfer.token_contract_address_hash
     end)
     |> Enum.uniq()
-    |> Enum.each(&update_token/1)
+    |> TokenTotalSupplyUpdater.add_tokens()
 
     tokens_uniq = tokens |> Enum.uniq()
 
@@ -177,9 +178,9 @@ defmodule Indexer.Transform.TokenTransfers do
 
     {from_address_hash, to_address_hash} =
       if log.first_topic == TokenTransfer.weth_deposit_signature() do
-        {@burn_address, truncate_address_hash(log.second_topic)}
+        {burn_address_hash_string(), truncate_address_hash(log.second_topic)}
       else
-        {truncate_address_hash(log.second_topic), @burn_address}
+        {truncate_address_hash(log.second_topic), burn_address_hash_string()}
       end
 
     token_transfer = %{
@@ -260,30 +261,6 @@ defmodule Indexer.Transform.TokenTransfers do
     {token, token_transfer}
   end
 
-  defp update_token(nil), do: :ok
-
-  defp update_token(address_hash_string) do
-    {:ok, address_hash} = Chain.string_to_address_hash(address_hash_string)
-
-    token = Repo.get_by(Token, contract_address_hash: address_hash)
-
-    if token && !token.skip_metadata do
-      token_params =
-        address_hash_string
-        |> MetadataRetriever.get_total_supply_of()
-
-      token_to_update =
-        token
-        |> Repo.preload([:contract_address])
-
-      if token_params !== %{} do
-        {:ok, _} = Chain.update_token(token_to_update, token_params)
-      end
-    end
-
-    :ok
-  end
-
   def parse_erc1155_params(
         %{
           first_topic: unquote(TokenTransfer.erc1155_batch_transfer_signature()),
@@ -339,7 +316,7 @@ defmodule Indexer.Transform.TokenTransfers do
     {token, token_transfer}
   end
 
-  defp truncate_address_hash(nil), do: "0x0000000000000000000000000000000000000000"
+  defp truncate_address_hash(nil), do: burn_address_hash_string()
 
   defp truncate_address_hash("0x000000000000000000000000" <> truncated_hash) do
     "0x#{truncated_hash}"

@@ -71,9 +71,12 @@ defmodule Indexer.Fetcher.InternalTransaction do
   @impl BufferedTask
   def init(initial, reducer, _json_rpc_named_arguments) do
     {:ok, final} =
-      Chain.stream_blocks_with_unfetched_internal_transactions(initial, fn block_number, acc ->
-        reducer.(block_number, acc)
-      end)
+      Chain.stream_blocks_with_unfetched_internal_transactions(
+        initial,
+        fn block_number, acc ->
+          reducer.(block_number, acc)
+        end
+      )
 
     final
   end
@@ -274,6 +277,8 @@ defmodule Indexer.Fetcher.InternalTransaction do
           error_count: Enum.count(unique_numbers)
         )
 
+        handle_unique_key_violation(reason, unique_numbers)
+
         # re-queue the de-duped entries
         {:retry, unique_numbers}
     end
@@ -306,6 +311,19 @@ defmodule Indexer.Fetcher.InternalTransaction do
       end
     end)
   end
+
+  defp handle_unique_key_violation(%{exception: %{postgres: %{code: :unique_violation}}}, block_numbers) do
+    BlocksRunner.invalidate_consensus_blocks(block_numbers)
+
+    Logger.error(fn ->
+      [
+        "unique_violation on internal transactions import, block numbers: ",
+        inspect(block_numbers)
+      ]
+    end)
+  end
+
+  defp handle_unique_key_violation(_reason, _block_numbers), do: :ok
 
   defp handle_foreign_key_violation(internal_transactions_params, block_numbers) do
     BlocksRunner.invalidate_consensus_blocks(block_numbers)
@@ -349,7 +367,6 @@ defmodule Indexer.Fetcher.InternalTransaction do
       flush_interval: :timer.seconds(3),
       max_concurrency: Application.get_env(:indexer, __MODULE__)[:concurrency] || @default_max_concurrency,
       max_batch_size: Application.get_env(:indexer, __MODULE__)[:batch_size] || @default_max_batch_size,
-      poll: true,
       task_supervisor: Indexer.Fetcher.InternalTransaction.TaskSupervisor,
       metadata: [fetcher: :internal_transaction]
     ]

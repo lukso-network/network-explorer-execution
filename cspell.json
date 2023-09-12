@@ -518,7 +518,13 @@
         "zkbob",
         "erts",
         "Asfpp",
-        "Nerg"
+        "Nerg",
+        "secp",
+        "qwertyuioiuytrewertyuioiuytrertyuio",
+        "urlset",
+        "lastmod",
+        "qitmeer",
+        "meer",
     ],
     "enableFiletypes": [
         "dotenv",

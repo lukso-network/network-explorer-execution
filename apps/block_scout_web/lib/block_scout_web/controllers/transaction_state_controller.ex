@@ -10,15 +10,15 @@ defmodule BlockScoutWeb.TransactionStateController do
   }
 
   alias Explorer.{Chain, Market}
-  alias Explorer.ExchangeRates.Token
   alias Phoenix.View
 
   import BlockScoutWeb.Account.AuthController, only: [current_user: 1]
   import BlockScoutWeb.Models.GetAddressTags, only: [get_address_tags: 2]
   import BlockScoutWeb.Models.GetTransactionTags, only: [get_transaction_with_addresses_tags: 2]
   import BlockScoutWeb.Chain, only: [paging_options: 1, next_page_params: 3, split_list_by_page: 1]
+  import Explorer.Chain.SmartContract, only: [burn_address_hash_string: 0]
 
-  {:ok, burn_address_hash} = Chain.string_to_address_hash("0x0000000000000000000000000000000000000000")
+  {:ok, burn_address_hash} = Chain.string_to_address_hash(burn_address_hash_string())
 
   @burn_address_hash burn_address_hash
 
@@ -107,7 +107,7 @@ defmodule BlockScoutWeb.TransactionStateController do
       render(
         conn,
         "index.html",
-        exchange_rate: Market.get_exchange_rate(Explorer.coin()) || Token.null(),
+        exchange_rate: Market.get_coin_exchange_rate(),
         block_height: Chain.block_height(),
         current_path: Controller.current_full_path(conn),
         show_token_transfers: Chain.transaction_has_token_transfers?(transaction_hash),
