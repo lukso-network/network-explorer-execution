@@ -183,30 +183,6 @@ defmodule Explorer.ChainTest do
       assert result.token_contract_address_hash == token.contract_address_hash
     end
 
-    test "replaces existing token instance record" do
-      token = insert(:token)
-
-      params = %{
-        token_id: 1,
-        token_contract_address_hash: token.contract_address_hash,
-        metadata: %{uri: "http://example.com"}
-      }
-
-      {:ok, _} = Chain.upsert_token_instance(params)
-
-      params1 = %{
-        token_id: 1,
-        token_contract_address_hash: token.contract_address_hash,
-        metadata: %{uri: "http://example1.com"}
-      }
-
-      {:ok, result} = Chain.upsert_token_instance(params1)
-
-      assert result.token_id == Decimal.new(1)
-      assert result.metadata == params1.metadata
-      assert result.token_contract_address_hash == token.contract_address_hash
-    end
-
     test "fails to import with invalid params" do
       params = %{
         token_id: 1,
@@ -243,7 +219,8 @@ defmodule Explorer.ChainTest do
       insert(:token_instance,
         token_id: 1,
         token_contract_address_hash: token.contract_address_hash,
-        error: "no uri"
+        error: "no uri",
+        metadata: nil
       )
 
       params = %{
@@ -1501,7 +1478,7 @@ defmodule Explorer.ChainTest do
       Supervisor.restart_child(Explorer.Supervisor, Explorer.Chain.Cache.Block.child_id())
 
       on_exit(fn ->
-        Application.put_env(:indexer, :first_block, "")
+        Application.put_env(:indexer, :first_block, 0)
       end)
     end
 
@@ -1531,7 +1508,7 @@ defmodule Explorer.ChainTest do
     end
 
     test "returns 1.0 if fully indexed blocks starting from given FIRST_BLOCK" do
-      Application.put_env(:indexer, :first_block, "5")
+      Application.put_env(:indexer, :first_block, 5)
 
       for index <- 5..9 do
         insert(:block, number: index, consensus: true)
@@ -1550,7 +1527,7 @@ defmodule Explorer.ChainTest do
       Supervisor.restart_child(Explorer.Supervisor, PendingBlockOperationCache.child_id())
 
       on_exit(fn ->
-        Application.put_env(:indexer, :trace_first_block, "")
+        Application.put_env(:indexer, :trace_first_block, 0)
         Supervisor.terminate_child(Explorer.Supervisor, PendingBlockOperationCache.child_id())
       end)
     end
@@ -1582,7 +1559,7 @@ defmodule Explorer.ChainTest do
     end
 
     test "returns 1.0 if fully indexed blocks with internal transactions starting from given TRACE_FIRST_BLOCK" do
-      Application.put_env(:indexer, :trace_first_block, "5")
+      Application.put_env(:indexer, :trace_first_block, 5)
 
       for index <- 5..9 do
         insert(:block, number: index)
@@ -4059,268 +4036,6 @@ defmodule Explorer.ChainTest do
     end
   end
 
-  describe "create_smart_contract/1" do
-    setup do
-      smart_contract_bytecode =
-        "0x608060405234801561001057600080fd5b5060df8061001f6000396000f3006080604052600436106049576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806360fe47b114604e5780636d4ce63c146078575b600080fd5b348015605957600080fd5b5060766004803603810190808035906020019092919050505060a0565b005b348015608357600080fd5b50608a60aa565b6040518082815260200191505060405180910390f35b8060008190555050565b600080549050905600a165627a7a7230582040d82a7379b1ee1632ad4d8a239954fd940277b25628ead95259a85c5eddb2120029"
-
-      created_contract_address =
-        insert(
-          :address,
-          hash: "0x0f95fa9bc0383e699325f2658d04e8d96d87b90c",
-          contract_code: smart_contract_bytecode
-        )
-
-      transaction =
-        :transaction
-        |> insert()
-        |> with_block()
-
-      insert(
-        :internal_transaction_create,
-        transaction: transaction,
-        index: 0,
-        created_contract_address: created_contract_address,
-        created_contract_code: smart_contract_bytecode,
-        block_number: transaction.block_number,
-        block_hash: transaction.block_hash,
-        block_index: 0,
-        transaction_index: transaction.index
-      )
-
-      valid_attrs = %{
-        address_hash: "0x0f95fa9bc0383e699325f2658d04e8d96d87b90c",
-        name: "SimpleStorage",
-        compiler_version: "0.4.23",
-        optimization: false,
-        contract_source_code:
-          "pragma solidity ^0.4.23; contract SimpleStorage {uint storedData; function set(uint x) public {storedData = x; } function get() public constant returns (uint) {return storedData; } }",
-        abi: [
-          %{
-            "constant" => false,
-            "inputs" => [%{"name" => "x", "type" => "uint256"}],
-            "name" => "set",
-            "outputs" => [],
-            "payable" => false,
-            "stateMutability" => "nonpayable",
-            "type" => "function"
-          },
-          %{
-            "constant" => true,
-            "inputs" => [],
-            "name" => "get",
-            "outputs" => [%{"name" => "", "type" => "uint256"}],
-            "payable" => false,
-            "stateMutability" => "view",
-            "type" => "function"
-          }
-        ]
-      }
-
-      {:ok, valid_attrs: valid_attrs, address: created_contract_address}
-    end
-
-    test "with valid data creates a smart contract", %{valid_attrs: valid_attrs} do
-      assert {:ok, %SmartContract{} = smart_contract} = Chain.create_smart_contract(valid_attrs)
-      assert smart_contract.name == "SimpleStorage"
-      assert smart_contract.compiler_version == "0.4.23"
-      assert smart_contract.optimization == false
-      assert smart_contract.contract_source_code != ""
-      assert smart_contract.abi != ""
-
-      assert Repo.get_by(
-               Address.Name,
-               address_hash: smart_contract.address_hash,
-               name: smart_contract.name,
-               primary: true
-             )
-    end
-
-    test "clears an existing primary name and sets the new one", %{valid_attrs: valid_attrs, address: address} do
-      insert(:address_name, address: address, primary: true)
-      assert {:ok, %SmartContract{} = smart_contract} = Chain.create_smart_contract(valid_attrs)
-
-      assert Repo.get_by(
-               Address.Name,
-               address_hash: smart_contract.address_hash,
-               name: smart_contract.name,
-               primary: true
-             )
-    end
-
-    test "trims whitespace from address name", %{valid_attrs: valid_attrs} do
-      attrs = %{valid_attrs | name: "     SimpleStorage     "}
-      assert {:ok, _} = Chain.create_smart_contract(attrs)
-      assert Repo.get_by(Address.Name, name: "SimpleStorage")
-    end
-
-    test "sets the address verified field to true", %{valid_attrs: valid_attrs} do
-      assert {:ok, %SmartContract{} = smart_contract} = Chain.create_smart_contract(valid_attrs)
-
-      assert Repo.get_by(Address, hash: smart_contract.address_hash).verified == true
-    end
-  end
-
-  describe "update_smart_contract/1" do
-    setup do
-      smart_contract_bytecode =
-        "0x608060405234801561001057600080fd5b5060df8061001f6000396000f3006080604052600436106049576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806360fe47b114604e5780636d4ce63c146078575b600080fd5b348015605957600080fd5b5060766004803603810190808035906020019092919050505060a0565b005b348015608357600080fd5b50608a60aa565b6040518082815260200191505060405180910390f35b8060008190555050565b600080549050905600a165627a7a7230582040d82a7379b1ee1632ad4d8a239954fd940277b25628ead95259a85c5eddb2120029"
-
-      created_contract_address =
-        insert(
-          :address,
-          hash: "0x0f95fa9bc0383e699325f2658d04e8d96d87b90c",
-          contract_code: smart_contract_bytecode
-        )
-
-      transaction =
-        :transaction
-        |> insert()
-        |> with_block()
-
-      insert(
-        :internal_transaction_create,
-        transaction: transaction,
-        index: 0,
-        created_contract_address: created_contract_address,
-        created_contract_code: smart_contract_bytecode,
-        block_number: transaction.block_number,
-        block_hash: transaction.block_hash,
-        block_index: 0,
-        transaction_index: transaction.index
-      )
-
-      valid_attrs = %{
-        address_hash: "0x0f95fa9bc0383e699325f2658d04e8d96d87b90c",
-        name: "SimpleStorage",
-        compiler_version: "0.4.23",
-        optimization: false,
-        contract_source_code:
-          "pragma solidity ^0.4.23; contract SimpleStorage {uint storedData; function set(uint x) public {storedData = x; } function get() public constant returns (uint) {return storedData; } }",
-        abi: [
-          %{
-            "constant" => false,
-            "inputs" => [%{"name" => "x", "type" => "uint256"}],
-            "name" => "set",
-            "outputs" => [],
-            "payable" => false,
-            "stateMutability" => "nonpayable",
-            "type" => "function"
-          },
-          %{
-            "constant" => true,
-            "inputs" => [],
-            "name" => "get",
-            "outputs" => [%{"name" => "", "type" => "uint256"}],
-            "payable" => false,
-            "stateMutability" => "view",
-            "type" => "function"
-          }
-        ],
-        partially_verified: true
-      }
-
-      secondary_sources = [
-        %{
-          file_name: "storage.sol",
-          contract_source_code:
-            "pragma solidity >=0.7.0 <0.9.0;contract Storage {uint256 number;function store(uint256 num) public {number = num;}function retrieve_() public view returns (uint256){return number;}}",
-          address_hash: "0x0f95fa9bc0383e699325f2658d04e8d96d87b90c"
-        },
-        %{
-          file_name: "storage_1.sol",
-          contract_source_code:
-            "pragma solidity >=0.7.0 <0.9.0;contract Storage_1 {uint256 number;function store(uint256 num) public {number = num;}function retrieve_() public view returns (uint256){return number;}}",
-          address_hash: "0x0f95fa9bc0383e699325f2658d04e8d96d87b90c"
-        }
-      ]
-
-      changed_sources = [
-        %{
-          file_name: "storage_2.sol",
-          contract_source_code:
-            "pragma solidity >=0.7.0 <0.9.0;contract Storage_2 {uint256 number;function store(uint256 num) public {number = num;}function retrieve_() public view returns (uint256){return number;}}",
-          address_hash: "0x0f95fa9bc0383e699325f2658d04e8d96d87b90c"
-        },
-        %{
-          file_name: "storage_3.sol",
-          contract_source_code:
-            "pragma solidity >=0.7.0 <0.9.0;contract Storage_3 {uint256 number;function store(uint256 num) public {number = num;}function retrieve_() public view returns (uint256){return number;}}",
-          address_hash: "0x0f95fa9bc0383e699325f2658d04e8d96d87b90c"
-        }
-      ]
-
-      _ = Chain.create_smart_contract(valid_attrs, [], secondary_sources)
-
-      {:ok,
-       valid_attrs: valid_attrs,
-       address: created_contract_address,
-       secondary_sources: secondary_sources,
-       changed_sources: changed_sources}
-    end
-
-    test "change partially_verified field", %{valid_attrs: valid_attrs, address: address} do
-      sc_before_call = Repo.get_by(SmartContract, address_hash: address.hash)
-      assert sc_before_call.name == Map.get(valid_attrs, :name)
-      assert sc_before_call.partially_verified == Map.get(valid_attrs, :partially_verified)
-
-      assert {:ok, %SmartContract{}} =
-               Chain.update_smart_contract(%{address_hash: address.hash, partially_verified: false})
-
-      sc_after_call = Repo.get_by(SmartContract, address_hash: address.hash)
-      assert sc_after_call.name == Map.get(valid_attrs, :name)
-      assert sc_after_call.partially_verified == false
-      assert sc_after_call.compiler_version == Map.get(valid_attrs, :compiler_version)
-      assert sc_after_call.optimization == Map.get(valid_attrs, :optimization)
-      assert sc_after_call.contract_source_code == Map.get(valid_attrs, :contract_source_code)
-    end
-
-    test "check nothing changed", %{valid_attrs: valid_attrs, address: address} do
-      sc_before_call = Repo.get_by(SmartContract, address_hash: address.hash)
-      assert sc_before_call.name == Map.get(valid_attrs, :name)
-      assert sc_before_call.partially_verified == Map.get(valid_attrs, :partially_verified)
-
-      assert {:ok, %SmartContract{}} = Chain.update_smart_contract(%{address_hash: address.hash})
-
-      sc_after_call = Repo.get_by(SmartContract, address_hash: address.hash)
-      assert sc_after_call.name == Map.get(valid_attrs, :name)
-      assert sc_after_call.partially_verified == Map.get(valid_attrs, :partially_verified)
-      assert sc_after_call.compiler_version == Map.get(valid_attrs, :compiler_version)
-      assert sc_after_call.optimization == Map.get(valid_attrs, :optimization)
-      assert sc_after_call.contract_source_code == Map.get(valid_attrs, :contract_source_code)
-    end
-
-    test "check additional sources update", %{
-      address: address,
-      secondary_sources: secondary_sources,
-      changed_sources: changed_sources
-    } do
-      sc_before_call = Repo.get_by(Address, hash: address.hash) |> Repo.preload(:smart_contract_additional_sources)
-
-      assert sc_before_call.smart_contract_additional_sources
-             |> Enum.with_index()
-             |> Enum.all?(fn {el, ind} ->
-               {:ok, src} = Enum.fetch(secondary_sources, ind)
-
-               el.file_name == Map.get(src, :file_name) and
-                 el.contract_source_code == Map.get(src, :contract_source_code)
-             end)
-
-      assert {:ok, %SmartContract{}} = Chain.update_smart_contract(%{address_hash: address.hash}, [], changed_sources)
-
-      sc_after_call = Repo.get_by(Address, hash: address.hash) |> Repo.preload(:smart_contract_additional_sources)
-
-      assert sc_after_call.smart_contract_additional_sources
-             |> Enum.with_index()
-             |> Enum.all?(fn {el, ind} ->
-               {:ok, src} = Enum.fetch(changed_sources, ind)
-
-               el.file_name == Map.get(src, :file_name) and
-                 el.contract_source_code == Map.get(src, :contract_source_code)
-             end)
-    end
-  end
-
   describe "stream_unfetched_balances/2" do
     test "with `t:Explorer.Chain.Address.CoinBalance.t/0` with value_fetched_at with same `address_hash` and `block_number` " <>
            "does not return `t:Explorer.Chain.Block.t/0` `miner_hash`" do
@@ -4835,14 +4550,6 @@ defmodule Explorer.ChainTest do
     assert Chain.circulating_supply() == ProofOfAuthority.circulating()
   end
 
-  describe "address_hash_to_smart_contract/1" do
-    test "fetches a smart contract" do
-      smart_contract = insert(:smart_contract, contract_code_md5: "123")
-
-      assert ^smart_contract = Chain.address_hash_to_smart_contract(smart_contract.address_hash)
-    end
-  end
-
   describe "token_from_address_hash/1" do
     test "with valid hash" do
       token = insert(:token)
@@ -4903,7 +4610,7 @@ defmodule Explorer.ChainTest do
     end
   end
 
-  describe "stream_unfetched_token_instances/2" do
+  describe "stream_not_inserted_token_instances/2" do
     test "reduces with given reducer and accumulator for ERC-721 token" do
       token_contract_address = insert(:contract_address)
       token = insert(:token, contract_address: token_contract_address, type: "ERC-721")
@@ -4924,7 +4631,7 @@ defmodule Explorer.ChainTest do
           token_ids: [11]
         )
 
-      assert {:ok, [result]} = Chain.stream_unfetched_token_instances([], &[&1 | &2])
+      assert {:ok, [result]} = Chain.stream_not_inserted_token_instances([], &[&1 | &2])
       assert result.token_id == List.first(token_transfer.token_ids)
       assert result.contract_address_hash == token_transfer.token_contract_address_hash
     end
@@ -4948,7 +4655,7 @@ defmodule Explorer.ChainTest do
         token_ids: nil
       )
 
-      assert {:ok, []} = Chain.stream_unfetched_token_instances([], &[&1 | &2])
+      assert {:ok, []} = Chain.stream_not_inserted_token_instances([], &[&1 | &2])
     end
 
     test "do not fetch records with token instances" do
@@ -4976,7 +4683,7 @@ defmodule Explorer.ChainTest do
         token_contract_address_hash: token_transfer.token_contract_address_hash
       )
 
-      assert {:ok, []} = Chain.stream_unfetched_token_instances([], &[&1 | &2])
+      assert {:ok, []} = Chain.stream_not_inserted_token_instances([], &[&1 | &2])
     end
   end
 
@@ -5815,374 +5522,5 @@ defmodule Explorer.ChainTest do
 
       assert [%SmartContract{address_hash: ^hash}] = Chain.verified_contracts(search: contract_name)
     end
-  end
-
-  describe "proxy contracts features" do
-    @proxy_abi [
-      %{
-        "type" => "function",
-        "stateMutability" => "nonpayable",
-        "payable" => false,
-        "outputs" => [%{"type" => "bool", "name" => ""}],
-        "name" => "upgradeTo",
-        "inputs" => [%{"type" => "address", "name" => "newImplementation"}],
-        "constant" => false
-      },
-      %{
-        "type" => "function",
-        "stateMutability" => "view",
-        "payable" => false,
-        "outputs" => [%{"type" => "uint256", "name" => ""}],
-        "name" => "version",
-        "inputs" => [],
-        "constant" => true
-      },
-      %{
-        "type" => "function",
-        "stateMutability" => "view",
-        "payable" => false,
-        "outputs" => [%{"type" => "address", "name" => ""}],
-        "name" => "implementation",
-        "inputs" => [],
-        "constant" => true
-      },
-      %{
-        "type" => "function",
-        "stateMutability" => "nonpayable",
-        "payable" => false,
-        "outputs" => [],
-        "name" => "renounceOwnership",
-        "inputs" => [],
-        "constant" => false
-      },
-      %{
-        "type" => "function",
-        "stateMutability" => "view",
-        "payable" => false,
-        "outputs" => [%{"type" => "address", "name" => ""}],
-        "name" => "getOwner",
-        "inputs" => [],
-        "constant" => true
-      },
-      %{
-        "type" => "function",
-        "stateMutability" => "view",
-        "payable" => false,
-        "outputs" => [%{"type" => "address", "name" => ""}],
-        "name" => "getProxyStorage",
-        "inputs" => [],
-        "constant" => true
-      },
-      %{
-        "type" => "function",
-        "stateMutability" => "nonpayable",
-        "payable" => false,
-        "outputs" => [],
-        "name" => "transferOwnership",
-        "inputs" => [%{"type" => "address", "name" => "_newOwner"}],
-        "constant" => false
-      },
-      %{
-        "type" => "constructor",
-        "stateMutability" => "nonpayable",
-        "payable" => false,
-        "inputs" => [
-          %{"type" => "address", "name" => "_proxyStorage"},
-          %{"type" => "address", "name" => "_implementationAddress"}
-        ]
-      },
-      %{"type" => "fallback", "stateMutability" => "nonpayable", "payable" => false},
-      %{
-        "type" => "event",
-        "name" => "Upgraded",
-        "inputs" => [
-          %{"type" => "uint256", "name" => "version", "indexed" => false},
-          %{"type" => "address", "name" => "implementation", "indexed" => true}
-        ],
-        "anonymous" => false
-      },
-      %{
-        "type" => "event",
-        "name" => "OwnershipRenounced",
-        "inputs" => [%{"type" => "address", "name" => "previousOwner", "indexed" => true}],
-        "anonymous" => false
-      },
-      %{
-        "type" => "event",
-        "name" => "OwnershipTransferred",
-        "inputs" => [
-          %{"type" => "address", "name" => "previousOwner", "indexed" => true},
-          %{"type" => "address", "name" => "newOwner", "indexed" => true}
-        ],
-        "anonymous" => false
-      }
-    ]
-
-    @implementation_abi [
-      %{
-        "constant" => false,
-        "inputs" => [%{"name" => "x", "type" => "uint256"}],
-        "name" => "set",
-        "outputs" => [],
-        "payable" => false,
-        "stateMutability" => "nonpayable",
-        "type" => "function"
-      },
-      %{
-        "constant" => true,
-        "inputs" => [],
-        "name" => "get",
-        "outputs" => [%{"name" => "", "type" => "uint256"}],
-        "payable" => false,
-        "stateMutability" => "view",
-        "type" => "function"
-      }
-    ]
-
-    test "combine_proxy_implementation_abi/2 returns empty [] abi if proxy abi is null" do
-      proxy_contract_address = insert(:contract_address)
-
-      assert Chain.combine_proxy_implementation_abi(%SmartContract{address_hash: proxy_contract_address.hash, abi: nil}) ==
-               []
-    end
-
-    test "combine_proxy_implementation_abi/2 returns [] abi for unverified proxy" do
-      proxy_contract_address = insert(:contract_address)
-
-      smart_contract =
-        insert(:smart_contract, address_hash: proxy_contract_address.hash, abi: [], contract_code_md5: "123")
-
-      get_eip1967_implementation()
-
-      assert Chain.combine_proxy_implementation_abi(smart_contract) == []
-    end
-
-    test "combine_proxy_implementation_abi/2 returns proxy abi if implementation is not verified" do
-      proxy_contract_address = insert(:contract_address)
-
-      smart_contract =
-        insert(:smart_contract, address_hash: proxy_contract_address.hash, abi: @proxy_abi, contract_code_md5: "123")
-
-      assert Chain.combine_proxy_implementation_abi(smart_contract) == @proxy_abi
-    end
-
-    test "combine_proxy_implementation_abi/2 returns proxy + implementation abi if implementation is verified" do
-      proxy_contract_address = insert(:contract_address)
-
-      smart_contract =
-        insert(:smart_contract, address_hash: proxy_contract_address.hash, abi: @proxy_abi, contract_code_md5: "123")
-
-      implementation_contract_address = insert(:contract_address)
-
-      insert(:smart_contract,
-        address_hash: implementation_contract_address.hash,
-        abi: @implementation_abi,
-        contract_code_md5: "123"
-      )
-
-      implementation_contract_address_hash_string =
-        Base.encode16(implementation_contract_address.hash.bytes, case: :lower)
-
-      expect(
-        EthereumJSONRPC.Mox,
-        :json_rpc,
-        fn [%{id: id, method: _, params: [%{data: _, to: _}, _]}], _options ->
-          {:ok,
-           [
-             %{
-               id: id,
-               jsonrpc: "2.0",
-               result: "0x000000000000000000000000" <> implementation_contract_address_hash_string
-             }
-           ]}
-        end
-      )
-
-      combined_abi = Chain.combine_proxy_implementation_abi(smart_contract)
-
-      assert Enum.any?(@proxy_abi, fn el -> el == Enum.at(@implementation_abi, 0) end) == false
-      assert Enum.any?(@proxy_abi, fn el -> el == Enum.at(@implementation_abi, 1) end) == false
-      assert Enum.any?(combined_abi, fn el -> el == Enum.at(@implementation_abi, 0) end) == true
-      assert Enum.any?(combined_abi, fn el -> el == Enum.at(@implementation_abi, 1) end) == true
-    end
-
-    test "get_implementation_abi_from_proxy/2 returns empty [] abi if proxy abi is null" do
-      proxy_contract_address = insert(:contract_address)
-
-      assert Chain.get_implementation_abi_from_proxy(
-               %SmartContract{address_hash: proxy_contract_address.hash, abi: nil},
-               []
-             ) ==
-               []
-    end
-
-    test "get_implementation_abi_from_proxy/2 returns [] abi for unverified proxy" do
-      proxy_contract_address = insert(:contract_address)
-
-      smart_contract =
-        insert(:smart_contract, address_hash: proxy_contract_address.hash, abi: [], contract_code_md5: "123")
-
-      get_eip1967_implementation()
-
-      assert Chain.combine_proxy_implementation_abi(smart_contract) == []
-    end
-
-    test "get_implementation_abi_from_proxy/2 returns [] if implementation is not verified" do
-      proxy_contract_address = insert(:contract_address)
-
-      smart_contract =
-        insert(:smart_contract, address_hash: proxy_contract_address.hash, abi: @proxy_abi, contract_code_md5: "123")
-
-      assert Chain.get_implementation_abi_from_proxy(smart_contract, []) == []
-    end
-
-    test "get_implementation_abi_from_proxy/2 returns implementation abi if implementation is verified" do
-      proxy_contract_address = insert(:contract_address)
-
-      smart_contract =
-        insert(:smart_contract, address_hash: proxy_contract_address.hash, abi: @proxy_abi, contract_code_md5: "123")
-
-      implementation_contract_address = insert(:contract_address)
-
-      insert(:smart_contract,
-        address_hash: implementation_contract_address.hash,
-        abi: @implementation_abi,
-        contract_code_md5: "123"
-      )
-
-      implementation_contract_address_hash_string =
-        Base.encode16(implementation_contract_address.hash.bytes, case: :lower)
-
-      expect(
-        EthereumJSONRPC.Mox,
-        :json_rpc,
-        fn [%{id: id, method: _, params: [%{data: _, to: _}, _]}], _options ->
-          {:ok,
-           [
-             %{
-               id: id,
-               jsonrpc: "2.0",
-               result: "0x000000000000000000000000" <> implementation_contract_address_hash_string
-             }
-           ]}
-        end
-      )
-
-      implementation_abi = Chain.get_implementation_abi_from_proxy(smart_contract, [])
-
-      assert implementation_abi == @implementation_abi
-    end
-
-    test "get_implementation_abi_from_proxy/2 returns implementation abi in case of EIP-1967 proxy pattern" do
-      proxy_contract_address = insert(:contract_address)
-
-      smart_contract =
-        insert(:smart_contract, address_hash: proxy_contract_address.hash, abi: [], contract_code_md5: "123")
-
-      implementation_contract_address = insert(:contract_address)
-
-      insert(:smart_contract,
-        address_hash: implementation_contract_address.hash,
-        abi: @implementation_abi,
-        contract_code_md5: "123"
-      )
-
-      implementation_contract_address_hash_string =
-        Base.encode16(implementation_contract_address.hash.bytes, case: :lower)
-
-      expect(
-        EthereumJSONRPC.Mox,
-        :json_rpc,
-        fn %{
-             id: _id,
-             method: "eth_getStorageAt",
-             params: [
-               _,
-               "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
-               "latest"
-             ]
-           },
-           _options ->
-          {:ok, "0x000000000000000000000000" <> implementation_contract_address_hash_string}
-        end
-      )
-
-      implementation_abi = Chain.get_implementation_abi_from_proxy(smart_contract, [])
-
-      assert implementation_abi == @implementation_abi
-    end
-
-    test "get_implementation_abi/1 returns empty [] abi if implementation address is null" do
-      assert Chain.get_implementation_abi(nil) == []
-    end
-
-    test "get_implementation_abi/1 returns [] if implementation is not verified" do
-      implementation_contract_address = insert(:contract_address)
-
-      implementation_contract_address_hash_string =
-        Base.encode16(implementation_contract_address.hash.bytes, case: :lower)
-
-      assert Chain.get_implementation_abi("0x" <> implementation_contract_address_hash_string) == []
-    end
-
-    test "get_implementation_abi/1 returns implementation abi if implementation is verified" do
-      proxy_contract_address = insert(:contract_address)
-      insert(:smart_contract, address_hash: proxy_contract_address.hash, abi: @proxy_abi, contract_code_md5: "123")
-
-      implementation_contract_address = insert(:contract_address)
-
-      insert(:smart_contract,
-        address_hash: implementation_contract_address.hash,
-        abi: @implementation_abi,
-        contract_code_md5: "123"
-      )
-
-      implementation_contract_address_hash_string =
-        Base.encode16(implementation_contract_address.hash.bytes, case: :lower)
-
-      implementation_abi = Chain.get_implementation_abi("0x" <> implementation_contract_address_hash_string)
-
-      assert implementation_abi == @implementation_abi
-    end
-  end
-
-  def get_eip1967_implementation do
-    EthereumJSONRPC.Mox
-    |> expect(:json_rpc, fn %{
-                              id: 0,
-                              method: "eth_getStorageAt",
-                              params: [
-                                _,
-                                "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
-                                "latest"
-                              ]
-                            },
-                            _options ->
-      {:ok, "0x0000000000000000000000000000000000000000000000000000000000000000"}
-    end)
-    |> expect(:json_rpc, fn %{
-                              id: 0,
-                              method: "eth_getStorageAt",
-                              params: [
-                                _,
-                                "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50",
-                                "latest"
-                              ]
-                            },
-                            _options ->
-      {:ok, "0x0000000000000000000000000000000000000000000000000000000000000000"}
-    end)
-    |> expect(:json_rpc, fn %{
-                              id: 0,
-                              method: "eth_getStorageAt",
-                              params: [
-                                _,
-                                "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3",
-                                "latest"
-                              ]
-                            },
-                            _options ->
-      {:ok, "0x0000000000000000000000000000000000000000000000000000000000000000"}
-    end)
   end
 end

@@ -46,10 +46,10 @@ defmodule BlockScoutWeb.ApiRouter do
     plug(RateLimit)
   end
 
-  alias BlockScoutWeb.Account.Api.V1.{AuthenticateController, EmailController, TagsController, UserController}
+  alias BlockScoutWeb.Account.Api.V2.{AuthenticateController, EmailController, TagsController, UserController}
   alias BlockScoutWeb.API.V2
 
-  scope "/account/v1", as: :account_v1 do
+  scope "/account/v2", as: :account_v2 do
     pipe_through(:api)
     pipe_through(:account_api)
 
@@ -101,7 +101,7 @@ defmodule BlockScoutWeb.ApiRouter do
     end
   end
 
-  scope "/account/v1" do
+  scope "/account/v2" do
     pipe_through(:api)
     pipe_through(:account_api)
 
@@ -116,6 +116,7 @@ defmodule BlockScoutWeb.ApiRouter do
     pipe_through(:api_v2_no_session)
 
     post("/token-info", V2.ImportController, :import_token_info)
+    get("/smart-contracts/:address_hash_param", V2.ImportController, :try_to_search_contract)
   end
 
   scope "/v2", as: :api_v2 do
@@ -135,6 +136,15 @@ defmodule BlockScoutWeb.ApiRouter do
     scope "/transactions" do
       get("/", V2.TransactionController, :transactions)
       get("/watchlist", V2.TransactionController, :watchlist_transactions)
+
+      if System.get_env("CHAIN_TYPE") == "polygon_zkevm" do
+        get("/zkevm-batch/:batch_number", V2.TransactionController, :zkevm_batch)
+      end
+
+      if System.get_env("CHAIN_TYPE") == "suave" do
+        get("/execution-node/:execution_node_hash_param", V2.TransactionController, :execution_node)
+      end
+
       get("/:transaction_hash_param", V2.TransactionController, :transaction)
       get("/:transaction_hash_param/token-transfers", V2.TransactionController, :token_transfers)
       get("/:transaction_hash_param/internal-transactions", V2.TransactionController, :internal_transactions)
@@ -165,6 +175,8 @@ defmodule BlockScoutWeb.ApiRouter do
       get("/:address_hash_param/coin-balance-history", V2.AddressController, :coin_balance_history)
       get("/:address_hash_param/coin-balance-history-by-day", V2.AddressController, :coin_balance_history_by_day)
       get("/:address_hash_param/withdrawals", V2.AddressController, :withdrawals)
+      get("/:address_hash_param/nft", V2.AddressController, :nft_list)
+      get("/:address_hash_param/nft/collections", V2.AddressController, :nft_collections)
     end
 
     scope "/tokens" do
@@ -185,6 +197,11 @@ defmodule BlockScoutWeb.ApiRouter do
       get("/transactions", V2.MainPageController, :transactions)
       get("/transactions/watchlist", V2.MainPageController, :watchlist_transactions)
       get("/indexing-status", V2.MainPageController, :indexing_status)
+
+      if System.get_env("CHAIN_TYPE") == "polygon_zkevm" do
+        get("/zkevm/batches/confirmed", V2.ZkevmController, :batches_confirmed)
+        get("/zkevm/batches/latest-number", V2.ZkevmController, :batch_latest_number)
+      end
     end
 
     scope "/stats" do
@@ -196,9 +213,26 @@ defmodule BlockScoutWeb.ApiRouter do
       end
     end
 
+    scope "/polygon-edge" do
+      if System.get_env("CHAIN_TYPE") == "polygon_edge" do
+        get("/deposits", V2.PolygonEdgeController, :deposits)
+        get("/deposits/count", V2.PolygonEdgeController, :deposits_count)
+        get("/withdrawals", V2.PolygonEdgeController, :withdrawals)
+        get("/withdrawals/count", V2.PolygonEdgeController, :withdrawals_count)
+      end
+    end
+
     scope "/withdrawals" do
       get("/", V2.WithdrawalController, :withdrawals_list)
       get("/counters", V2.WithdrawalController, :withdrawals_counters)
+    end
+
+    scope "/zkevm" do
+      if System.get_env("CHAIN_TYPE") == "polygon_zkevm" do
+        get("/batches", V2.ZkevmController, :batches)
+        get("/batches/count", V2.ZkevmController, :batches_count)
+        get("/batches/:batch_number", V2.ZkevmController, :batch)
+      end
     end
   end
 

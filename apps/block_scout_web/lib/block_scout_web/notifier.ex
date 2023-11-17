@@ -114,6 +114,16 @@ defmodule BlockScoutWeb.Notifier do
     end)
   end
 
+  def handle_event({:chain_event, :zkevm_confirmed_batches, :realtime, batches}) do
+    batches
+    |> Enum.sort_by(& &1.number, :asc)
+    |> Enum.each(fn confirmed_batch ->
+      Endpoint.broadcast("zkevm_batches:new_zkevm_confirmed_batch", "new_zkevm_confirmed_batch", %{
+        batch: confirmed_batch
+      })
+    end)
+  end
+
   def handle_event({:chain_event, :exchange_rate}) do
     exchange_rate = Market.get_coin_exchange_rate()
 
@@ -222,9 +232,16 @@ defmodule BlockScoutWeb.Notifier do
     Endpoint.broadcast("addresses:#{to_string(address_hash)}", "changed_bytecode", %{})
   end
 
-  def handle_event({:chain_event, :smart_contract_was_verified, :on_demand, [address_hash]}) do
-    log_broadcast_smart_contract_was_verified(address_hash)
-    Endpoint.broadcast("addresses:#{to_string(address_hash)}", "smart_contract_was_verified", %{})
+  def handle_event({:chain_event, :smart_contract_was_verified = event, :on_demand, [address_hash]}) do
+    broadcast_automatic_verification_events(event, address_hash)
+  end
+
+  def handle_event({:chain_event, :smart_contract_was_not_verified = event, :on_demand, [address_hash]}) do
+    broadcast_automatic_verification_events(event, address_hash)
+  end
+
+  def handle_event({:chain_event, :eth_bytecode_db_lookup_started = event, :on_demand, [address_hash]}) do
+    broadcast_automatic_verification_events(event, address_hash)
   end
 
   def handle_event({:chain_event, :address_current_token_balances, :on_demand, address_current_token_balances}) do
@@ -495,7 +512,12 @@ defmodule BlockScoutWeb.Notifier do
     Logger.info("Broadcast smart-contract #{address_hash} verification results")
   end
 
-  defp log_broadcast_smart_contract_was_verified(address_hash) do
-    Logger.info("Broadcast smart-contract #{address_hash} was verified")
+  defp log_broadcast_smart_contract_event(address_hash, event) do
+    Logger.info("Broadcast smart-contract #{address_hash}: #{event}")
+  end
+
+  defp broadcast_automatic_verification_events(event, address_hash) do
+    log_broadcast_smart_contract_event(address_hash, event)
+    Endpoint.broadcast("addresses:#{to_string(address_hash)}", to_string(event), %{})
   end
 end

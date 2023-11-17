@@ -8,6 +8,7 @@ defmodule Explorer.Chain.Log do
   alias ABI.{Event, FunctionSelector}
   alias Explorer.Chain
   alias Explorer.Chain.{Address, Block, ContractMethod, Data, Hash, Transaction}
+  alias Explorer.Chain.SmartContract.Proxy
   alias Explorer.SmartContract.SigProviderInterface
 
   @required_attrs ~w(address_hash data block_hash index transaction_hash)a
@@ -165,7 +166,7 @@ defmodule Explorer.Chain.Log do
     else
       case Chain.find_contract_address(address_hash, address_options, false) do
         {:ok, %{smart_contract: smart_contract}} ->
-          full_abi = Chain.combine_proxy_implementation_abi(smart_contract, options)
+          full_abi = Proxy.combine_proxy_implementation_abi(smart_contract, options)
           {full_abi, Map.put(acc, address_hash, full_abi)}
 
         _ ->
@@ -229,7 +230,9 @@ defmodule Explorer.Chain.Log do
     end
   end
 
-  defp find_and_decode(abi, log, transaction) do
+  @spec find_and_decode([map()], __MODULE__.t(), Transaction.t()) ::
+          {:error, any} | {:ok, ABI.FunctionSelector.t(), any}
+  def find_and_decode(abi, log, transaction) do
     with {%FunctionSelector{} = selector, mapping} <-
            abi
            |> ABI.parse_specification(include_events?: true)
@@ -313,5 +316,12 @@ defmodule Explorer.Chain.Log do
     value
     |> String.trim_leading("0x")
     |> Base.decode16!(case: :lower)
+  end
+
+  def fetch_log_by_tx_hash_and_first_topic(tx_hash, first_topic, options \\ []) do
+    __MODULE__
+    |> where([l], l.transaction_hash == ^tx_hash and l.first_topic == ^first_topic)
+    |> limit(1)
+    |> Chain.select_repo(options).one()
   end
 end
