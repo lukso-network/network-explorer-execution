@@ -5,7 +5,7 @@ defmodule Explorer.SmartContract.Solidity.Publisher do
 
   require Logger
 
-  import Explorer.SmartContract.Helper, only: [cast_libraries: 1]
+  import Explorer.SmartContract.Helper, only: [cast_libraries: 1, prepare_license_type: 1]
 
   alias Explorer.Chain.SmartContract
   alias Explorer.SmartContract.{CompilerVersion, Helper}
@@ -48,7 +48,7 @@ defmodule Explorer.SmartContract.Solidity.Publisher do
           "sourceFiles" => _
         } = result_params
       } ->
-        process_rust_verifier_response(result_params, address_hash, false, false)
+        process_rust_verifier_response(result_params, address_hash, params, false, false)
 
       {:ok, %{abi: abi, constructor_arguments: constructor_arguments}} ->
         params_with_constructor_arguments =
@@ -84,7 +84,7 @@ defmodule Explorer.SmartContract.Solidity.Publisher do
          "sourceFiles" => _,
          "compilerSettings" => _
        } = result_params} ->
-        process_rust_verifier_response(result_params, address_hash, true, true)
+        process_rust_verifier_response(result_params, address_hash, params, true, true)
 
       {:ok, %{abi: abi, constructor_arguments: constructor_arguments}, additional_params} ->
         params_with_constructor_arguments =
@@ -124,7 +124,7 @@ defmodule Explorer.SmartContract.Solidity.Publisher do
          "sourceFiles" => _,
          "compilerSettings" => _
        } = result_params} ->
-        process_rust_verifier_response(result_params, address_hash, false, true)
+        process_rust_verifier_response(result_params, address_hash, params, false, true)
 
       {:error, error} ->
         {:error, unverified_smart_contract(address_hash, params, error, nil, true)}
@@ -146,6 +146,7 @@ defmodule Explorer.SmartContract.Solidity.Publisher do
           "matchType" => match_type
         } = source,
         address_hash,
+        initial_params,
         is_standard_json?,
         save_file_path?,
         automatically_verified? \\ false
@@ -175,8 +176,10 @@ defmodule Explorer.SmartContract.Solidity.Publisher do
       |> Map.put("secondary_sources", secondary_sources)
       |> Map.put("compiler_settings", if(is_standard_json?, do: compiler_settings))
       |> Map.put("partially_verified", match_type == "PARTIAL")
-      |> Map.put("verified_via_eth_bytecode_db", automatically_verified?)
       |> Map.put("verified_via_sourcify", source["sourcify?"])
+      |> Map.put("verified_via_eth_bytecode_db", automatically_verified?)
+      |> Map.put("verified_via_verifier_alliance", source["verifier_alliance?"])
+      |> Map.put("license_type", initial_params["license_type"])
 
     publish_smart_contract(address_hash, prepared_params, Jason.decode!(abi_string || "null"))
   end
@@ -234,12 +237,7 @@ defmodule Explorer.SmartContract.Solidity.Publisher do
     constructor_arguments = params["constructor_arguments"]
     compiler_settings = params["compiler_settings"]
 
-    clean_constructor_arguments =
-      if constructor_arguments != nil && constructor_arguments != "" do
-        constructor_arguments
-      else
-        nil
-      end
+    clean_constructor_arguments = clear_constructor_arguments(constructor_arguments)
 
     clean_compiler_settings =
       if compiler_settings in ["", nil, %{}] do
@@ -266,13 +264,23 @@ defmodule Explorer.SmartContract.Solidity.Publisher do
       secondary_sources: params["secondary_sources"],
       abi: abi,
       verified_via_sourcify: params["verified_via_sourcify"] || false,
+      verified_via_eth_bytecode_db: params["verified_via_eth_bytecode_db"] || false,
+      verified_via_verifier_alliance: params["verified_via_verifier_alliance"] || false,
       partially_verified: params["partially_verified"] || false,
       is_vyper_contract: false,
       autodetect_constructor_args: params["autodetect_constructor_args"],
       is_yul: params["is_yul"] || false,
       compiler_settings: clean_compiler_settings,
-      verified_via_eth_bytecode_db: params["verified_via_eth_bytecode_db"] || false
+      license_type: prepare_license_type(params["license_type"]) || :none
     }
+  end
+
+  defp clear_constructor_arguments(constructor_arguments) do
+    if constructor_arguments != nil && constructor_arguments != "" do
+      constructor_arguments
+    else
+      nil
+    end
   end
 
   defp prepare_external_libraries(nil), do: []

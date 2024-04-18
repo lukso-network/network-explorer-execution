@@ -86,7 +86,10 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
         )
 
       request = get(conn, "/api/v2/tokens/#{token.contract_address.hash}/counters")
+      assert json_response(request, 200)
 
+      Process.sleep(500)
+      request = get(conn, "/api/v2/tokens/#{token.contract_address.hash}/counters")
       assert response = json_response(request, 200)
 
       assert response["transfers_count"] == "3"
@@ -160,6 +163,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
             block_number: tx.block_number,
             token_contract_address: token.contract_address,
             token_ids: Enum.map(0..50, fn _x -> id end),
+            token_type: "ERC-1155",
             amounts: Enum.map(0..50, fn x -> x end)
           )
         end
@@ -192,7 +196,8 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
             block: tx.block,
             block_number: tx.block_number,
             token_contract_address: token.contract_address,
-            token_ids: [i]
+            token_ids: [i],
+            token_type: "ERC-721"
           )
         end
 
@@ -218,6 +223,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           block_number: tx.block_number,
           token_contract_address: token.contract_address,
           token_ids: Enum.map(0..50, fn x -> x end),
+          token_type: "ERC-1155",
           amounts: Enum.map(0..50, fn x -> x end)
         )
 
@@ -250,6 +256,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           block_number: tx_1.block_number,
           token_contract_address: token.contract_address,
           token_ids: Enum.map(0..24, fn x -> x end),
+          token_type: "ERC-1155",
           amounts: Enum.map(0..24, fn x -> x end)
         )
 
@@ -267,6 +274,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           block_number: tx_2.block_number,
           token_contract_address: token.contract_address,
           token_ids: Enum.map(25..49, fn x -> x end),
+          token_type: "ERC-1155",
           amounts: Enum.map(25..49, fn x -> x end)
         )
 
@@ -282,6 +290,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           block_number: tx_2.block_number,
           token_contract_address: token.contract_address,
           token_ids: [50],
+          token_type: "ERC-1155",
           amounts: [50]
         )
 
@@ -308,6 +317,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           block_number: tx_1.block_number,
           token_contract_address: token.contract_address,
           token_ids: Enum.map(0..24, fn x -> x end),
+          token_type: "ERC-1155",
           amounts: Enum.map(0..24, fn x -> x end)
         )
 
@@ -325,6 +335,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           block_number: tx_2.block_number,
           token_contract_address: token.contract_address,
           token_ids: Enum.map(25..50, fn x -> x end),
+          token_type: "ERC-1155",
           amounts: Enum.map(25..50, fn x -> x end)
         )
 
@@ -524,6 +535,8 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
         tokens_ordered_by_holders_asc
       )
 
+      :timer.sleep(200)
+
       # by circulating_market_cap
       tokens_ordered_by_circulating_market_cap =
         Enum.sort(tokens, &(&1.circulating_market_cap <= &2.circulating_market_cap))
@@ -626,9 +639,15 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           insert(:token, type: "ERC-1155")
         end
 
+      erc_404_tokens =
+        for _i <- 0..50 do
+          insert(:token, type: "ERC-404")
+        end
+
       check_tokens_pagination(erc_20_tokens, conn, %{"type" => "ERC-20"})
       check_tokens_pagination(erc_721_tokens |> Enum.reverse(), conn, %{"type" => "ERC-721"})
       check_tokens_pagination(erc_1155_tokens |> Enum.reverse(), conn, %{"type" => "ERC-1155"})
+      check_tokens_pagination(erc_404_tokens |> Enum.reverse(), conn, %{"type" => "ERC-404"})
     end
 
     test "tokens are filtered by multiple type", %{conn: conn} do
@@ -647,6 +666,11 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           insert(:token, type: "ERC-1155")
         end
 
+      erc_404_tokens =
+        for _i <- 0..24 do
+          insert(:token, type: "ERC-404")
+        end
+
       check_tokens_pagination(
         erc_721_tokens |> Kernel.++(erc_1155_tokens) |> Enum.reverse(),
         conn,
@@ -660,6 +684,14 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
         conn,
         %{
           "type" => "[erc-20,ERC-1155]"
+        }
+      )
+
+      check_tokens_pagination(
+        erc_404_tokens |> Enum.reverse() |> Kernel.++(erc_20_tokens),
+        conn,
+        %{
+          "type" => "[erc-20,ERC-404]"
         }
       )
     end
@@ -993,11 +1025,12 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
 
       instance = insert(:token_instance, token_id: 0, token_contract_address_hash: token.contract_address_hash)
 
-      transfer =
+      _transfer =
         insert(:token_transfer,
           token_contract_address: token.contract_address,
           transaction: transaction,
-          token_ids: [0]
+          token_ids: [0],
+          token_type: "ERC-721"
         )
 
       for _ <- 1..50 do
@@ -1009,6 +1042,26 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
       assert data = json_response(request, 200)
       assert compare_item(instance, data)
       assert Address.checksum(instance.owner_address_hash) == data["owner"]["hash"]
+    end
+
+    test "get token instance by token id which is not presented in DB", %{conn: conn} do
+      token = insert(:token, type: "ERC-721")
+
+      request = get(conn, "/api/v2/tokens/#{token.contract_address.hash}/instances/0")
+      token_address = Address.checksum(token.contract_address.hash)
+      token_name = token.name
+      token_type = token.type
+
+      assert %{
+               "animation_url" => nil,
+               "external_app_url" => nil,
+               "id" => "0",
+               "image_url" => nil,
+               "is_unique" => true,
+               "metadata" => nil,
+               "owner" => nil,
+               "token" => %{"address" => ^token_address, "name" => ^token_name, "type" => ^token_type}
+             } = json_response(request, 200)
     end
   end
 
@@ -1047,6 +1100,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
         token_contract_address: token.contract_address,
         transaction: transaction,
         token_ids: [id + 1],
+        token_type: "ERC-1155",
         amounts: [1]
       )
 
@@ -1055,6 +1109,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           token_contract_address: token.contract_address,
           transaction: transaction,
           token_ids: [id, id + 1],
+          token_type: "ERC-1155",
           amounts: [1, 2]
         )
 
@@ -1068,7 +1123,70 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           insert(:token_transfer,
             token_contract_address: token.contract_address,
             transaction: transaction,
-            token_ids: [id]
+            token_ids: [id],
+            token_type: "ERC-1155"
+          )
+        end
+
+      request = get(conn, "/api/v2/tokens/#{token.contract_address_hash}/instances/#{id}/transfers")
+      assert response = json_response(request, 200)
+
+      request_2nd_page =
+        get(
+          conn,
+          "/api/v2/tokens/#{token.contract_address_hash}/instances/#{id}/transfers",
+          response["next_page_params"]
+        )
+
+      assert response_2nd_page = json_response(request_2nd_page, 200)
+      check_paginated_response(response, response_2nd_page, transfers_0 ++ transfers_1)
+    end
+
+    test "check that pagination works for 404 tokens", %{conn: conn} do
+      token = insert(:token, type: "ERC-404")
+
+      for _ <- 0..50 do
+        insert(:token_instance, token_id: 0)
+      end
+
+      id = :rand.uniform(1_000_000)
+
+      transaction =
+        :transaction
+        |> insert(input: "0xabcd010203040506")
+        |> with_block()
+
+      insert(:token_instance, token_id: id, token_contract_address_hash: token.contract_address_hash)
+
+      insert_list(100, :token_transfer,
+        token_contract_address: token.contract_address,
+        transaction: transaction,
+        token_ids: [id + 1],
+        token_type: "ERC-404",
+        amounts: [1]
+      )
+
+      transfers_0 =
+        insert_list(26, :token_transfer,
+          token_contract_address: token.contract_address,
+          transaction: transaction,
+          token_ids: [id, id + 1],
+          token_type: "ERC-404",
+          amounts: [1, 2]
+        )
+
+      transfers_1 =
+        for _ <- 26..50 do
+          transaction =
+            :transaction
+            |> insert(input: "0xabcd010203040506")
+            |> with_block()
+
+          insert(:token_transfer,
+            token_contract_address: token.contract_address,
+            transaction: transaction,
+            token_ids: [id],
+            token_type: "ERC-404"
           )
         end
 
@@ -1100,7 +1218,8 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
             block: tx.block,
             block_number: tx.block_number,
             token_contract_address: token.contract_address,
-            token_ids: [id]
+            token_ids: [id],
+            token_type: "ERC-721"
           )
         end
 
@@ -1135,6 +1254,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
           block_number: tx.block_number,
           token_contract_address: token.contract_address,
           token_ids: Enum.map(0..50, fn _x -> id end),
+          token_type: "ERC-1155",
           amounts: Enum.map(0..50, fn x -> x end)
         )
 
@@ -1163,6 +1283,7 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
             block_number: tx.block_number,
             token_contract_address: token.contract_address,
             token_ids: Enum.map(0..50, fn x -> x end) ++ [id],
+            token_type: "ERC-1155",
             amounts: Enum.map(1..51, fn x -> x end) ++ [amount]
           )
         end
@@ -1292,7 +1413,8 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
       insert_list(count, :token_transfer,
         token_contract_address: token.contract_address,
         transaction: transaction,
-        token_ids: [0]
+        token_ids: [0],
+        token_type: "ERC-721"
       )
 
       request = get(conn, "/api/v2/tokens/#{token.contract_address.hash}/instances/0/transfers-count")

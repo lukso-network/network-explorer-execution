@@ -1,4 +1,6 @@
 defmodule ConfigHelper do
+  require Logger
+
   import Bitwise
   alias Explorer.ExchangeRates.Source
   alias Explorer.Market.History.Source.{MarketCap, Price, TVL}
@@ -7,12 +9,25 @@ defmodule ConfigHelper do
   def repos do
     base_repos = [Explorer.Repo, Explorer.Repo.Account]
 
-    case System.get_env("CHAIN_TYPE") do
-      "polygon_edge" -> base_repos ++ [Explorer.Repo.PolygonEdge]
-      "polygon_zkevm" -> base_repos ++ [Explorer.Repo.PolygonZkevm]
-      "rsk" -> base_repos ++ [Explorer.Repo.RSK]
-      "suave" -> base_repos ++ [Explorer.Repo.Suave]
-      _ -> base_repos
+    repos =
+      case System.get_env("CHAIN_TYPE") do
+        "ethereum" -> base_repos ++ [Explorer.Repo.Beacon]
+        "optimism" -> base_repos ++ [Explorer.Repo.Optimism]
+        "polygon_edge" -> base_repos ++ [Explorer.Repo.PolygonEdge]
+        "polygon_zkevm" -> base_repos ++ [Explorer.Repo.PolygonZkevm]
+        "rsk" -> base_repos ++ [Explorer.Repo.RSK]
+        "shibarium" -> base_repos ++ [Explorer.Repo.Shibarium]
+        "suave" -> base_repos ++ [Explorer.Repo.Suave]
+        "filecoin" -> base_repos ++ [Explorer.Repo.Filecoin]
+        "stability" -> base_repos ++ [Explorer.Repo.Stability]
+        "zksync" -> base_repos ++ [Explorer.Repo.ZkSync]
+        _ -> base_repos
+      end
+
+    if System.get_env("BRIDGED_TOKENS_ENABLED") do
+      repos ++ [Explorer.Repo.BridgedTokens]
+    else
+      repos
     end
   end
 
@@ -49,6 +64,17 @@ defmodule ConfigHelper do
     end
   end
 
+  @spec parse_float_env_var(String.t(), float()) :: float()
+  def parse_float_env_var(env_var, default_value) do
+    env_var
+    |> safe_get_env(to_string(default_value))
+    |> Float.parse()
+    |> case do
+      {float, _} -> float
+      _ -> 0
+    end
+  end
+
   @spec parse_integer_or_nil_env_var(String.t()) :: non_neg_integer() | nil
   def parse_integer_or_nil_env_var(env_var) do
     env_var
@@ -69,6 +95,35 @@ defmodule ConfigHelper do
       {seconds, s} when s in ["s", ""] -> :timer.seconds(seconds)
       _ -> 0
     end
+  end
+
+  @doc """
+  Parses value of env var through catalogued values list. If a value is not in the list, nil is returned.
+  Also, the application shutdown option is supported, if a value is wrong.
+  """
+  @spec parse_catalog_value(String.t(), List.t(), bool(), String.t() | nil) :: atom() | nil
+  def parse_catalog_value(env_var, catalog, shutdown_on_wrong_value?, default_value \\ nil) do
+    value = env_var |> safe_get_env(default_value)
+
+    if value !== "" do
+      if value in catalog do
+        String.to_atom(value)
+      else
+        if shutdown_on_wrong_value? do
+          Logger.error(wrong_value_error(value, env_var, catalog))
+          exit(:shutdown)
+        else
+          Logger.warning(wrong_value_error(value, env_var, catalog))
+          nil
+        end
+      end
+    else
+      nil
+    end
+  end
+
+  defp wrong_value_error(value, env_var, catalog) do
+    "Wrong value #{value} of #{env_var} environment variable. Supported values are #{inspect(catalog)}"
   end
 
   def safe_get_env(env_var, default_value) do
@@ -146,6 +201,20 @@ defmodule ConfigHelper do
     end
   end
 
+  @spec exchange_rates_secondary_coin_price_source() :: Price.CoinGecko | Price.CoinMarketCap | Price.CryptoCompare
+  def exchange_rates_secondary_coin_price_source do
+    cmc_secondary_coin_id = System.get_env("EXCHANGE_RATES_COINMARKETCAP_SECONDARY_COIN_ID")
+    cg_secondary_coin_id = System.get_env("EXCHANGE_RATES_COINGECKO_SECONDARY_COIN_ID")
+    cc_secondary_coin_symbol = System.get_env("EXCHANGE_RATES_CRYPTOCOMPARE_SECONDARY_COIN_SYMBOL")
+
+    cond do
+      cg_secondary_coin_id && cg_secondary_coin_id !== "" -> Price.CoinGecko
+      cmc_secondary_coin_id && cmc_secondary_coin_id !== "" -> Price.CoinMarketCap
+      cc_secondary_coin_symbol && cc_secondary_coin_symbol !== "" -> Price.CryptoCompare
+      true -> Price.CryptoCompare
+    end
+  end
+
   def block_transformer do
     block_transformers = %{
       "clique" => Blocks.Clique,
@@ -181,7 +250,7 @@ defmodule ConfigHelper do
   end
 
   @spec chain_type() :: String.t()
-  def chain_type, do: System.get_env("CHAIN_TYPE") || "ethereum"
+  def chain_type, do: System.get_env("CHAIN_TYPE") || "default"
 
   @spec eth_call_url(String.t() | nil) :: String.t() | nil
   def eth_call_url(default \\ nil) do
