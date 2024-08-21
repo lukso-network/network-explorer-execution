@@ -45,6 +45,7 @@ defmodule Explorer.Chain.TokenTransfer do
   @erc404_erc721_transfer_event "0xe5f815dc84b8cecdfd4beedfc3f91ab5be7af100eca4e8fb11552b867995394f"
 
   @lsp7_transfer_event_topic_hash "0x3997e418d2cef0b3b0e907b1e39605c3f7d32dbd061e82ea5b4a770d46a160a6"
+  @lsp8_transfer_event_topic_hash "0xb333c813a7426a7a11e2b190cad52c44119421594b47f6f32ace6d8c7207b2bf"
 
   @transfer_function_signature "0xa9059cbb"
 
@@ -152,6 +153,8 @@ defmodule Explorer.Chain.TokenTransfer do
   def erc404_erc721_transfer_event, do: @erc404_erc721_transfer_event
 
   def lsp7_transfer_event_topic_hash, do: @lsp7_transfer_event_topic_hash
+
+  def lsp8_transfer_event_topic_hash, do: @lsp8_transfer_event_topic_hash
 
   @doc """
   ERC 20's transfer(address,uint256) function signature
