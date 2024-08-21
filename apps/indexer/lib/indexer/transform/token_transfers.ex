@@ -38,6 +38,13 @@ defmodule Indexer.Transform.TokenTransfers do
       end)
       |> Enum.reduce(initial_acc, &do_parse(&1, &2, :erc1155))
 
+    lsp7_token_transfers =
+      logs
+      |> Enum.filter(fn log ->
+        log.first_topic == TokenTransfer.lsp7_token_single_transfer_event_hash()
+      end)
+      |> Enum.reduce(initial_acc, &do_parse(&1, &2, :erc725))
+
     erc404_token_transfers =
       logs
       |> Enum.filter(fn log ->
