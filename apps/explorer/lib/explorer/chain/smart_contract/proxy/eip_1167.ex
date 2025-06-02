@@ -8,21 +8,20 @@ defmodule Explorer.Chain.SmartContract.Proxy.EIP1167 do
   alias Explorer.Chain.SmartContract.Proxy
 
   @doc """
-  Get implementation address following EIP-1167
+  Get implementation address hash string following EIP-1167. It returns the value as array of the strings.
   """
-  @spec get_implementation_address(Hash.Address.t(), Keyword.t()) :: SmartContract.t() | nil
-  def get_implementation_address(address_hash, options \\ []) do
-    address_hash
-    |> get_implementation_address_hash_string(options)
-    |> implementation_to_smart_contract(options)
+  @spec get_implementation_address_hash_strings(Hash.Address.t(), [Chain.api?()]) :: [binary()]
+  def get_implementation_address_hash_strings(proxy_address_hash, options \\ []) do
+    case get_implementation_address_hash_string(proxy_address_hash, options) do
+      nil -> []
+      implementation_address_hash_string -> [implementation_address_hash_string]
+    end
   end
 
-  @doc """
-  Get implementation address hash string following EIP-1167
-  """
-  @spec get_implementation_address_hash_string(Hash.Address.t(), Keyword.t()) :: String.t() | nil
-  def get_implementation_address_hash_string(address_hash, options \\ []) do
-    case Chain.select_repo(options).get(Address, address_hash) do
+  # Get implementation address hash string following EIP-1167
+  @spec get_implementation_address_hash_string(Hash.Address.t(), Keyword.t()) :: binary() | nil
+  defp get_implementation_address_hash_string(proxy_address_hash, options) do
+    case Chain.select_repo(options).get(Address, proxy_address_hash) do
       nil ->
         nil
 
@@ -55,16 +54,13 @@ defmodule Explorer.Chain.SmartContract.Proxy.EIP1167 do
     end
   end
 
-  defp implementation_to_smart_contract(nil, _options), do: nil
-
-  defp implementation_to_smart_contract(address_hash, options) do
-    necessity_by_association = %{
-      :smart_contract_additional_sources => :optional
-    }
-
+  @doc """
+  Get implementation address following EIP-1167. It is used in old UI.
+  """
+  @spec get_implementation_smart_contract(Hash.Address.t(), Keyword.t()) :: SmartContract.t() | nil
+  def get_implementation_smart_contract(address_hash, options \\ []) do
     address_hash
-    |> SmartContract.get_smart_contract_query()
-    |> Chain.join_associations(necessity_by_association)
-    |> Chain.select_repo(options).one(timeout: 10_000)
+    |> get_implementation_address_hash_string(options)
+    |> Proxy.implementation_to_smart_contract(options)
   end
 end

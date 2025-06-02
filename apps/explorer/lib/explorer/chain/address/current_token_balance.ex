@@ -11,9 +11,11 @@ defmodule Explorer.Chain.Address.CurrentTokenBalance do
   import Ecto.Changeset
   import Ecto.Query, only: [from: 2, limit: 2, offset: 2, order_by: 3, preload: 2, dynamic: 2]
   import Explorer.Chain.SmartContract, only: [burn_address_hash_string: 0]
+  import Explorer.Chain.SmartContract.Proxy.Models.Implementation, only: [proxy_implementations_association: 0]
 
   alias Explorer.{Chain, PagingOptions, Repo}
   alias Explorer.Chain.{Address, Block, CurrencyHelper, Hash, Token}
+  alias Explorer.Chain.Address.TokenBalance
 
   @default_paging_options %PagingOptions{page_size: 50}
 
@@ -84,7 +86,7 @@ defmodule Explorer.Chain.Address.CurrentTokenBalance do
   def token_holders_ordered_by_value(token_contract_address_hash, options \\ []) do
     token_contract_address_hash
     |> token_holders_ordered_by_value_query_without_address_preload(options)
-    |> preload(:address)
+    |> preload(address: [:names, :smart_contract, ^proxy_implementations_association()])
   end
 
   @doc """
@@ -92,14 +94,21 @@ defmodule Explorer.Chain.Address.CurrentTokenBalance do
   """
   def token_holders_ordered_by_value_query_without_address_preload(token_contract_address_hash, options \\ []) do
     paging_options = Keyword.get(options, :paging_options, @default_paging_options)
-    offset = (max(paging_options.page_number, 1) - 1) * paging_options.page_size
 
-    token_contract_address_hash
-    |> token_holders_query
-    |> order_by([tb], desc: :value, desc: :address_hash)
-    |> Chain.page_token_balances(paging_options)
-    |> limit(^paging_options.page_size)
-    |> offset(^offset)
+    case paging_options do
+      %PagingOptions{key: {0, _}} ->
+        []
+
+      _ ->
+        offset = (max(paging_options.page_number, 1) - 1) * paging_options.page_size
+
+        token_contract_address_hash
+        |> token_holders_query
+        |> order_by([tb], desc: :value, desc: :address_hash)
+        |> Chain.page_token_balances(paging_options)
+        |> limit(^paging_options.page_size)
+        |> offset(^offset)
+    end
   end
 
   @doc """
@@ -116,12 +125,18 @@ defmodule Explorer.Chain.Address.CurrentTokenBalance do
   def token_holders_1155_by_token_id(token_contract_address_hash, token_id, options \\ []) do
     paging_options = Keyword.get(options, :paging_options, @default_paging_options)
 
-    token_contract_address_hash
-    |> token_holders_by_token_id_query(token_id)
-    |> preload(:address)
-    |> order_by([tb], desc: :value, desc: :address_hash)
-    |> Chain.page_token_balances(paging_options)
-    |> limit(^paging_options.page_size)
+    case paging_options do
+      %PagingOptions{key: {0, _}} ->
+        []
+
+      _ ->
+        token_contract_address_hash
+        |> token_holders_by_token_id_query(token_id)
+        |> preload(address: [:names, :smart_contract, ^proxy_implementations_association()])
+        |> order_by([tb], desc: :value, desc: :address_hash)
+        |> Chain.page_token_balances(paging_options)
+        |> limit(^paging_options.page_size)
+    end
   end
 
   @doc """
@@ -156,14 +171,14 @@ defmodule Explorer.Chain.Address.CurrentTokenBalance do
   end
 
   @doc """
-  Builds an `t:Ecto.Query.t/0` to fetch the current token balances of the given address (include unfetched).
+  Builds an `t:Ecto.Query.t/0` to fetch the current token balances of the given addresses (include unfetched).
   """
-  def last_token_balances_include_unfetched(address_hash) do
+  def last_token_balances_include_unfetched(address_hashes) do
     fiat_balance = fiat_value_query()
 
     from(
       ctb in __MODULE__,
-      where: ctb.address_hash == ^address_hash,
+      where: ctb.address_hash in ^address_hashes,
       left_join: t in assoc(ctb, :token),
       on: ctb.token_contract_address_hash == t.contract_address_hash,
       preload: [token: t],
@@ -310,7 +325,16 @@ defmodule Explorer.Chain.Address.CurrentTokenBalance do
   end
 
   @doc """
-  Converts CurrentTokenBalances to CSV format. Used in `BlockScoutWeb.API.V2.CSVExportController.export_token_holders/2`
+  Deletes all CurrentTokenBalances with given `token_contract_address_hash` and below the given `block_number`.
+  Used for cases when token doesn't implement balanceOf function
+  """
+  @spec delete_placeholders_below(Hash.Address.t(), Block.block_number()) :: {non_neg_integer(), nil | [term()]}
+  def delete_placeholders_below(token_contract_address_hash, block_number) do
+    TokenBalance.delete_token_balance_placeholders_below(__MODULE__, token_contract_address_hash, block_number)
+  end
+
+  @doc """
+  Converts CurrentTokenBalances to CSV format. Used in `BlockScoutWeb.API.V2.CsvExportController.export_token_holders/2`
   """
   @spec to_csv_format([t()], Token.t()) :: (any(), any() -> {:halted, any()} | {:suspended, any(), (any() -> any())})
   def to_csv_format(holders, token) do
@@ -324,7 +348,7 @@ defmodule Explorer.Chain.Address.CurrentTokenBalance do
       |> Stream.map(fn ctb ->
         [
           Address.checksum(ctb.address_hash),
-          CurrencyHelper.divide_decimals(ctb.value, token.decimals)
+          ctb.value |> CurrencyHelper.divide_decimals(token.decimals) |> Decimal.to_string(:xsd)
         ]
       end)
 

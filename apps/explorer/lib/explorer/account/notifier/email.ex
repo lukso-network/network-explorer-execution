@@ -5,8 +5,8 @@ defmodule Explorer.Account.Notifier.Email do
 
   require Logger
 
-  alias BlockScoutWeb.WebRouter.Helpers
   alias Explorer.Account.{Identity, Watchlist, WatchlistAddress, WatchlistNotification}
+  alias Explorer.Helper, as: ExplorerHelper
   alias Explorer.Repo
 
   import Bamboo.{Email, SendGridHelper}
@@ -30,13 +30,13 @@ defmodule Explorer.Account.Notifier.Email do
     |> add_dynamic_field("username", username(notification))
     |> add_dynamic_field("address_hash", address_hash_string(notification))
     |> add_dynamic_field("address_name", notification.watchlist_address.name)
-    |> add_dynamic_field("transaction_hash", hash_string(notification.transaction_hash))
-    |> add_dynamic_field("from_address_hash", hash_string(notification.from_address_hash))
-    |> add_dynamic_field("to_address_hash", hash_string(notification.to_address_hash))
+    |> add_dynamic_field("transaction_hash", ExplorerHelper.add_0x_prefix(notification.transaction_hash))
+    |> add_dynamic_field("from_address_hash", ExplorerHelper.add_0x_prefix(notification.from_address_hash))
+    |> add_dynamic_field("to_address_hash", ExplorerHelper.add_0x_prefix(notification.to_address_hash))
     |> add_dynamic_field("block_number", notification.block_number)
     |> add_dynamic_field("amount", amount(notification))
     |> add_dynamic_field("name", notification.name)
-    |> add_dynamic_field("tx_fee", notification.tx_fee)
+    |> add_dynamic_field("transaction_fee", notification.transaction_fee)
     |> add_dynamic_field("direction", direction(notification))
     |> add_dynamic_field("method", notification.method)
     |> add_dynamic_field("transaction_url", transaction_url(notification))
@@ -90,11 +90,7 @@ defmodule Explorer.Account.Notifier.Email do
   defp address_hash_string(%WatchlistNotification{
          watchlist_address: %WatchlistAddress{address_hash: address_hash}
        }),
-       do: hash_string(address_hash)
-
-  defp hash_string(hash) do
-    "0x" <> Base.encode16(hash.bytes, case: :lower)
-  end
+       do: ExplorerHelper.add_0x_prefix(address_hash.bytes)
 
   defp direction(notification) do
     affect(notification) <> " " <> place(notification)
@@ -121,15 +117,15 @@ defmodule Explorer.Account.Notifier.Email do
   end
 
   defp address_url(address_hash) do
-    Helpers.address_url(uri(), :show, address_hash)
+    uri() |> URI.append_path("/address/#{address_hash}") |> to_string()
   end
 
   defp block_url(notification) do
-    Helpers.block_url(uri(), :show, Integer.to_string(notification.block_number))
+    uri() |> URI.append_path("/block/#{notification.block_number}") |> to_string()
   end
 
   defp transaction_url(notification) do
-    Helpers.transaction_url(uri(), :show, notification.transaction_hash)
+    uri() |> URI.append_path("/tx/#{notification.transaction_hash}") |> to_string()
   end
 
   defp url_params do
@@ -156,7 +152,7 @@ defmodule Explorer.Account.Notifier.Email do
     raw_path = url_params()[:path]
 
     if raw_path |> String.ends_with?("/") do
-      raw_path |> String.slice(0..-2)
+      raw_path |> String.slice(0..-2//1)
     else
       raw_path
     end

@@ -18,6 +18,8 @@ defmodule Explorer.MarketTest do
   end
 
   test "fetch_recent_history/1" do
+    ConCache.delete(:market_history, :last_update)
+
     today = Date.utc_today()
 
     records =
@@ -29,7 +31,7 @@ defmodule Explorer.MarketTest do
         }
       end
 
-    Market.bulk_insert_history(records)
+    MarketHistory.bulk_insert(records)
 
     history = Market.fetch_recent_history()
     assert length(history) == 30
@@ -57,7 +59,7 @@ defmodule Explorer.MarketTest do
       }
 
       insertable_records = Map.values(comparable_values)
-      Market.bulk_insert_history(insertable_records)
+      MarketHistory.bulk_insert(insertable_records)
       history = Repo.all(MarketHistory)
 
       missing_records =
@@ -84,7 +86,7 @@ defmodule Explorer.MarketTest do
         opening_price: Decimal.new(0)
       }
 
-      Market.bulk_insert_history([new_record])
+      MarketHistory.bulk_insert([new_record])
 
       fetched_record = Repo.get_by(MarketHistory, date: date)
       assert fetched_record.closing_price == old_record.closing_price
@@ -103,7 +105,7 @@ defmodule Explorer.MarketTest do
         opening_price: Decimal.new(1)
       }
 
-      Market.bulk_insert_history([new_record])
+      MarketHistory.bulk_insert([new_record])
 
       fetched_record = Repo.get_by(MarketHistory, date: date)
       assert fetched_record.closing_price == old_record.closing_price

@@ -15,6 +15,7 @@ defmodule Indexer.Block.Catchup.FetcherTest do
   alias Indexer.Block.Catchup.MissingRangesCollector
   alias Indexer.Fetcher.CoinBalance.Catchup, as: CoinBalanceCatchup
   alias Indexer.Fetcher.{BlockReward, InternalTransaction, Token, TokenBalance, UncleBlock}
+  alias Indexer.Fetcher.OnDemand.ContractCreator, as: ContractCreatorOnDemand
 
   @moduletag capture_log: true
 
@@ -40,6 +41,9 @@ defmodule Indexer.Block.Catchup.FetcherTest do
     setup do
       configuration = Application.get_env(:indexer, :last_block)
       Application.put_env(:indexer, :last_block, 0)
+      Application.put_env(:indexer, Indexer.Fetcher.Celo.EpochBlockOperations.Supervisor, disabled?: true)
+
+      {:ok, _pid} = ContractCreatorOnDemand.start_link([[], []])
 
       on_exit(fn ->
         Application.put_env(:indexer, :last_block, configuration)
@@ -51,6 +55,11 @@ defmodule Indexer.Block.Catchup.FetcherTest do
       InternalTransaction.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       Token.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       TokenBalance.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+
+      Indexer.Fetcher.Filecoin.AddressInfo.Supervisor.Case.start_supervised!(
+        json_rpc_named_arguments: json_rpc_named_arguments
+      )
+
       MissingRangesCollector.start_link([])
       MissingRangesManipulator.start_link([])
 
@@ -59,7 +68,7 @@ defmodule Indexer.Block.Catchup.FetcherTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, uncles}} ->
+            {:"$gen_call", from, {:buffer, uncles, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:uncles, uncles})
           end
@@ -141,6 +150,29 @@ defmodule Indexer.Block.Catchup.FetcherTest do
     setup do
       initial_env = Application.get_env(:indexer, :block_ranges)
       on_exit(fn -> Application.put_env(:indexer, :block_ranges, initial_env) end)
+      Application.put_env(:indexer, Indexer.Fetcher.Celo.EpochBlockOperations.Supervisor, disabled?: true)
+
+      Application.put_env(:explorer, Explorer.Chain.Cache.CeloCoreContracts,
+        contracts: %{
+          "addresses" => %{
+            "Accounts" => [],
+            "Election" => [],
+            "EpochRewards" => [],
+            "FeeHandler" => [],
+            "GasPriceMinimum" => [],
+            "GoldToken" => [],
+            "Governance" => [],
+            "LockedGold" => [],
+            "Reserve" => [],
+            "StableToken" => [],
+            "Validators" => []
+          }
+        }
+      )
+
+      on_exit(fn ->
+        Application.put_env(:explorer, Explorer.Chain.Cache.CeloCoreContracts, contracts: %{})
+      end)
     end
 
     test "ignores fetched beneficiaries with different hash for same number", %{
@@ -434,7 +466,7 @@ defmodule Indexer.Block.Catchup.FetcherTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, block_numbers}} ->
+            {:"$gen_call", from, {:buffer, block_numbers, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:block_numbers, block_numbers})
           end
@@ -584,7 +616,7 @@ defmodule Indexer.Block.Catchup.FetcherTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, block_numbers}} ->
+            {:"$gen_call", from, {:buffer, block_numbers, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:block_numbers, block_numbers})
           end
@@ -617,7 +649,7 @@ defmodule Indexer.Block.Catchup.FetcherTest do
       MissingRangesManipulator.start_link([])
 
       EthereumJSONRPC.Mox
-      |> expect(:json_rpc, 2, fn
+      |> expect(:json_rpc, 1, fn
         [
           %{
             id: id_1,
@@ -646,9 +678,6 @@ defmodule Indexer.Block.Catchup.FetcherTest do
                error: %{message: "error"}
              }
            ]}
-
-        [], _options ->
-          {:ok, []}
       end)
 
       Process.sleep(50)

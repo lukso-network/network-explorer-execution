@@ -3,6 +3,7 @@ defmodule BlockScoutWeb.API.RPC.AddressView do
 
   alias BlockScoutWeb.API.EthRPC.View, as: EthRPCView
   alias BlockScoutWeb.API.RPC.RPCView
+  alias Explorer.Chain.DenormalizationHelper
 
   def render("listaccounts.json", %{accounts: accounts}) do
     accounts = Enum.map(accounts, &prepare_account/1)
@@ -179,10 +180,14 @@ defmodule BlockScoutWeb.API.RPC.AddressView do
     |> Map.put_new(:tokenID, List.first(token_transfer.token_ids))
   end
 
+  # todo: Mark tokenID field as deprecated in release notes, and delete it in the next release
+  # when tokenID will be deleted, merge this, and next `prepare_token_transfer/1` clauses
   defp prepare_token_transfer(%{token_type: "ERC-1155", token_ids: [token_id]} = token_transfer) do
     token_transfer
     |> prepare_common_token_transfer()
     |> Map.put_new(:tokenID, token_id)
+    |> Map.put_new(:tokenIDs, token_transfer.token_ids)
+    |> Map.put_new(:values, token_transfer.amounts)
   end
 
   defp prepare_token_transfer(%{token_type: "ERC-1155"} = token_transfer) do
@@ -210,9 +215,16 @@ defmodule BlockScoutWeb.API.RPC.AddressView do
   end
 
   defp prepare_nft_transfer(token_transfer, max_block_number) do
+    timestamp =
+      if DenormalizationHelper.tt_denormalization_finished?() do
+        to_string(DateTime.to_unix(token_transfer.transaction.block_timestamp))
+      else
+        to_string(DateTime.to_unix(token_transfer.block.timestamp))
+      end
+
     %{
       "blockNumber" => to_string(token_transfer.block_number),
-      "timeStamp" => to_string(DateTime.to_unix(token_transfer.block.timestamp)),
+      "timeStamp" => timestamp,
       "hash" => to_string(token_transfer.transaction_hash),
       "nonce" => to_string(token_transfer.transaction.nonce),
       "blockHash" => to_string(token_transfer.block_hash),

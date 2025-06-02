@@ -84,7 +84,7 @@ defmodule Explorer.MicroserviceInterfaces.BENS do
     Request for ENS name via GET {{baseUrl}}/api/v1/:chainId/domains:lookup
   """
   @spec ens_domain_name_lookup(binary()) ::
-          nil | %{address_hash: binary(), expiry_date: any(), name: any(), names_count: integer()}
+          nil | %{address_hash: binary(), expiry_date: any(), name: any(), names_count: integer(), protocol: any()}
   def ens_domain_name_lookup(domain) do
     domain |> ens_domain_lookup() |> parse_lookup_response()
   end
@@ -137,7 +137,12 @@ defmodule Explorer.MicroserviceInterfaces.BENS do
   def enabled?, do: Microservice.check_enabled(__MODULE__) == :ok
 
   defp batch_resolve_name_url do
-    "#{addresses_url()}:batch-resolve-names"
+    # workaround for https://github.com/PSPDFKit-labs/bypass/issues/122
+    if Mix.env() == :test do
+      "#{addresses_url()}:batch_resolve_names"
+    else
+      "#{addresses_url()}:batch-resolve-names"
+    end
   end
 
   defp address_lookup_url do
@@ -149,7 +154,7 @@ defmodule Explorer.MicroserviceInterfaces.BENS do
   end
 
   defp domain_lookup_url do
-    "#{domains_url()}:lookup"
+    "#{domains_url()}%3Alookup"
   end
 
   defp addresses_url do
@@ -170,7 +175,12 @@ defmodule Explorer.MicroserviceInterfaces.BENS do
           %{
             "items" =>
               [
-                %{"name" => name, "expiry_date" => expiry_date, "resolved_address" => %{"hash" => address_hash_string}}
+                %{
+                  "name" => name,
+                  "expiry_date" => expiry_date,
+                  "resolved_address" => %{"hash" => address_hash_string},
+                  "protocol" => protocol
+                }
                 | _other
               ] = items
           }}
@@ -181,7 +191,8 @@ defmodule Explorer.MicroserviceInterfaces.BENS do
       name: name,
       expiry_date: expiry_date,
       names_count: Enum.count(items),
-      address_hash: Address.checksum(hash)
+      address_hash: Address.checksum(hash),
+      protocol: protocol
     }
   end
 
