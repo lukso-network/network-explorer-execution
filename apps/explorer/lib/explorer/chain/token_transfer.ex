@@ -160,6 +160,10 @@ defmodule Explorer.Chain.TokenTransfer do
   @erc1155_batch_transfer_signature "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb"
   @erc404_erc20_transfer_event "0xe59fdd36d0d223c0c7d996db7ad796880f45e1936cb0bb7ac102e7082e031487"
   @erc404_erc721_transfer_event "0xe5f815dc84b8cecdfd4beedfc3f91ab5be7af100eca4e8fb11552b867995394f"
+  # LSP7 Transfer event: Transfer(address operator, address from, address to, uint256 amount, bool force, bytes data)
+  @lsp7_transfer_event "0x3997e418d2cef0b3b0e907b1e39605c3f7d32dbd061e82ea5b4a770d46a160a6"
+  # LSP8 Transfer event: Transfer(address operator, address from, address to, bytes32 tokenId, bool force, bytes data)
+  @lsp8_transfer_event "0xb333c813a7426a7a11e2b190cad52c44119421594b47f6f32ace6d8c7207b2bf"
 
   @transfer_function_signature "0xa9059cbb"
 
@@ -227,6 +231,10 @@ defmodule Explorer.Chain.TokenTransfer do
   def erc404_erc20_transfer_event, do: @erc404_erc20_transfer_event
 
   def erc404_erc721_transfer_event, do: @erc404_erc721_transfer_event
+
+  def lsp7_transfer_event, do: @lsp7_transfer_event
+
+  def lsp8_transfer_event, do: @lsp8_transfer_event
 
   @doc """
   ERC 20's transfer(address,uint256) function signature
