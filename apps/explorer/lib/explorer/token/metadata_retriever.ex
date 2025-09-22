@@ -109,6 +109,25 @@ defmodule Explorer.Token.MetadataRetriever do
         }
       ],
       "stateMutability" => "view"
+    },
+    %{
+      "inputs" => [
+        %{
+          "internalType" => "bytes32",
+          "name" => "dataKey",
+          "type" => "bytes32"
+        }
+      ],
+      "name" => "getData",
+      "outputs" => [
+        %{
+          "internalType" => "bytes",
+          "name" => "dataValue",
+          "type" => "bytes"
+        }
+      ],
+      "stateMutability" => "view",
+      "type" => "function"
     }
   ]
 
@@ -135,6 +154,23 @@ defmodule Explorer.Token.MetadataRetriever do
 
   @total_supply_function %{
     @total_supply_signature => []
+  }
+
+  # 54f6127f = keccak256(getData(bytes32))
+  @get_data_signature "54f6127f"
+  
+  # LSP2 Data Keys for LSP7/8 tokens
+  # LSP4TokenName: keccak256('LSP4TokenName')
+  @lsp4_token_name_key "0xdeba1e292f8ba88238e10ab3c7f88bd4be4fac56cad5194b6ecceaf653468af1"
+  # LSP4TokenSymbol: keccak256('LSP4TokenSymbol')
+  @lsp4_token_symbol_key "0x2f0a68ab07768e01943a599e73362a0e17a63a72e94dd2e384d2c1d4db932756"
+  
+  @lsp_get_data_name_function %{
+    @get_data_signature => [@lsp4_token_name_key]
+  }
+  
+  @lsp_get_data_symbol_function %{
+    @get_data_signature => [@lsp4_token_symbol_key]
   }
 
   @doc """
@@ -223,8 +259,19 @@ defmodule Explorer.Token.MetadataRetriever do
         end)
         |> Enum.reverse()
       end
+    
+    # Try LSP metadata for tokens missing name or symbol
+    final_result =
+      processed_result
+      |> Enum.map(fn token ->
+        if (!Map.has_key?(token, :name) || !Map.has_key?(token, :symbol)) && Map.has_key?(token, :contract_address_hash) do
+          try_to_fetch_lsp_metadata(token, token.contract_address_hash)
+        else
+          token
+        end
+      end)
 
-    {:ok, processed_result}
+    {:ok, final_result}
   end
 
   def get_functions_of(%Token{contract_address_hash: contract_address_hash, type: type}, opts) do
@@ -238,7 +285,11 @@ defmodule Explorer.Token.MetadataRetriever do
       raw_metadata
       |> format_contract_functions_result(contract_address_hash)
 
+    # Try ERC-1155 specific fetching
     metadata = try_to_fetch_erc_1155_name(base_metadata, contract_address_hash, type)
+    
+    # Try LSP7/8 fetching if we don't have name or symbol
+    metadata = try_to_fetch_lsp_metadata(metadata, contract_address_hash)
 
     if Enum.empty?(metadata) && set_skip_metadata do
       Map.put(
@@ -276,6 +327,44 @@ defmodule Explorer.Token.MetadataRetriever do
         _ ->
           base_metadata
       end
+    else
+      base_metadata
+    end
+  end
+
+  defp try_to_fetch_lsp_metadata(base_metadata, contract_address_hash) do
+    # Only try LSP if we're missing name or symbol
+    if (!Map.has_key?(base_metadata, :name) || !Map.has_key?(base_metadata, :symbol)) do
+      lsp_metadata = %{}
+      
+      # Try to fetch name via getData if we don't have it
+      lsp_metadata = 
+        if !Map.has_key?(base_metadata, :name) do
+          name_result = 
+            contract_address_hash
+            |> fetch_functions_from_contract(@lsp_get_data_name_function)
+            |> format_lsp_data_result(:name)
+          
+          Map.merge(lsp_metadata, name_result)
+        else
+          lsp_metadata
+        end
+      
+      # Try to fetch symbol via getData if we don't have it
+      lsp_metadata =
+        if !Map.has_key?(base_metadata, :symbol) do
+          symbol_result =
+            contract_address_hash
+            |> fetch_functions_from_contract(@lsp_get_data_symbol_function)
+            |> format_lsp_data_result(:symbol)
+          
+          Map.merge(lsp_metadata, symbol_result)
+        else
+          lsp_metadata
+        end
+      
+      # Merge LSP metadata with base metadata
+      Map.merge(base_metadata, lsp_metadata)
     else
       base_metadata
     end
@@ -398,6 +487,7 @@ defmodule Explorer.Token.MetadataRetriever do
   defp atomized_key(@decimals_signature), do: :decimals
   defp atomized_key(@total_supply_signature), do: :total_supply
   defp atomized_key(@erc1155_contract_uri_signature), do: :name
+  defp atomized_key(@get_data_signature), do: :data
 
   # It's a temp fix to store tokens that have names and/or symbols with characters that the database
   # doesn't accept. See https://github.com/blockscout/blockscout/issues/669 for more info.
@@ -485,6 +575,41 @@ defmodule Explorer.Token.MetadataRetriever do
   defp remove_null_bytes(string) do
     String.replace(string, "\0", "")
   end
+
+  defp format_lsp_data_result(contract_result, field_name) do
+    case contract_result do
+      %{@get_data_signature => {:ok, [bytes_data]}} when is_binary(bytes_data) ->
+        # LSP data is returned as bytes, need to decode it
+        decoded = decode_lsp_bytes(bytes_data)
+        if decoded && String.valid?(decoded) && String.trim(decoded) != "" do
+          %{field_name => String.trim(decoded)}
+        else
+          %{}
+        end
+      _ ->
+        %{}
+    end
+  end
+
+  defp decode_lsp_bytes(<<"0x", hex_data::binary>>) do
+    decode_lsp_bytes(hex_data)
+  end
+
+  defp decode_lsp_bytes(hex_data) when is_binary(hex_data) do
+    case Base.decode16(hex_data, case: :mixed) do
+      {:ok, bytes} ->
+        # Try to decode as UTF-8 string
+        case :unicode.characters_to_binary(bytes) do
+          {:error, _, _} -> nil
+          {:incomplete, _, _} -> nil
+          decoded -> decoded
+        end
+      _ ->
+        nil
+    end
+  end
+
+  defp decode_lsp_bytes(_), do: nil
 
   @doc """
   Generates an IPFS link for the given unique identifier (UID).
