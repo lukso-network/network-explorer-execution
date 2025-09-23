@@ -262,15 +262,12 @@ defmodule Explorer.Token.MetadataRetriever do
       end
     
     # Try LSP metadata for tokens missing name or symbol
-    Logger.info("Starting LSP metadata fetch for #{length(processed_result)} tokens")
     final_result =
       processed_result
       |> Enum.map(fn token ->
         if (!Map.has_key?(token, :name) || !Map.has_key?(token, :symbol)) && Map.has_key?(token, :contract_address_hash) do
-          Logger.info("Token missing name/symbol, fetching LSP for: #{inspect(token.contract_address_hash)}")
           try_to_fetch_lsp_metadata(token, token.contract_address_hash)
         else
-          Logger.info("Token has name/symbol, skipping LSP: #{inspect(Map.get(token, :name, "no-name"))}/#{inspect(Map.get(token, :symbol, "no-symbol"))}")
           token
         end
       end)
@@ -289,15 +286,11 @@ defmodule Explorer.Token.MetadataRetriever do
       raw_metadata
       |> format_contract_functions_result(contract_address_hash)
 
-    Logger.info("Base metadata fetched: #{inspect(base_metadata)}")
-
     # Try ERC-1155 specific fetching
     metadata = try_to_fetch_erc_1155_name(base_metadata, contract_address_hash, type)
-    Logger.info("After ERC-1155 fetch: #{inspect(metadata)}")
 
     # Try LSP7/8 fetching if we don't have name or symbol
     metadata = try_to_fetch_lsp_metadata(metadata, contract_address_hash)
-    Logger.info("After LSP fetch: #{inspect(metadata)}")
 
     if Enum.empty?(metadata) && set_skip_metadata do
       Map.put(
@@ -343,17 +336,13 @@ defmodule Explorer.Token.MetadataRetriever do
   defp try_to_fetch_lsp_metadata(base_metadata, contract_address_hash) do
     # Only try LSP if we're missing name or symbol
     if (!Map.has_key?(base_metadata, :name) || !Map.has_key?(base_metadata, :symbol)) do
-      Logger.info("Attempting to fetch LSP metadata for #{inspect(contract_address_hash)}")
       lsp_metadata = %{}
 
       # Try to fetch name via getData if we don't have it
       lsp_metadata =
         if !Map.has_key?(base_metadata, :name) do
-          Logger.info("Fetching LSP name with key: #{@lsp4_token_name_key}")
           raw_result = fetch_functions_from_contract(contract_address_hash, @lsp_get_data_name_function)
-          Logger.info("LSP name raw result: #{inspect(raw_result)}")
           name_result = format_lsp_data_result(raw_result, :name)
-          Logger.info("LSP name formatted result: #{inspect(name_result)}")
 
           Map.merge(lsp_metadata, name_result)
         else
@@ -363,18 +352,14 @@ defmodule Explorer.Token.MetadataRetriever do
       # Try to fetch symbol via getData if we don't have it
       lsp_metadata =
         if !Map.has_key?(base_metadata, :symbol) do
-          Logger.info("Fetching LSP symbol with key: #{@lsp4_token_symbol_key}")
           raw_result = fetch_functions_from_contract(contract_address_hash, @lsp_get_data_symbol_function)
-          Logger.info("LSP symbol raw result: #{inspect(raw_result)}")
           symbol_result = format_lsp_data_result(raw_result, :symbol)
-          Logger.info("LSP symbol formatted result: #{inspect(symbol_result)}")
 
           Map.merge(lsp_metadata, symbol_result)
         else
           lsp_metadata
         end
 
-      Logger.info("Final LSP metadata: #{inspect(lsp_metadata)}")
       # Merge LSP metadata with base metadata
       Map.merge(base_metadata, lsp_metadata)
     else
@@ -431,9 +416,7 @@ defmodule Explorer.Token.MetadataRetriever do
 
   defp fetch_functions_with_retries(contract_address_hash, contract_functions, accumulator, retries_left)
        when retries_left > 0 do
-    Logger.info("fetch_functions_with_retries for #{inspect(contract_address_hash)}, functions: #{inspect(Map.keys(contract_functions))}")
     contract_functions_result = Reader.query_contract(contract_address_hash, nil, @contract_abi, contract_functions, false)
-    Logger.info("Contract functions result: #{inspect(contract_functions_result)}")
 
     functions_with_errors =
       Enum.filter(contract_functions_result, fn function ->
@@ -591,45 +574,34 @@ defmodule Explorer.Token.MetadataRetriever do
   end
 
   defp format_lsp_data_result(contract_result, field_name) do
-    Logger.info("format_lsp_data_result input: #{inspect(contract_result)}, field: #{inspect(field_name)}")
     case contract_result do
       %{@get_data_signature => {:ok, [bytes_data]}} when is_binary(bytes_data) ->
-        Logger.info("Got bytes data - type: #{inspect(is_binary(bytes_data))}, size: #{byte_size(bytes_data)}, data: #{inspect(bytes_data, limit: 100)}")
         # LSP data is returned as bytes, need to decode it
         decoded = decode_lsp_bytes(bytes_data)
-        Logger.info("Decoded bytes: #{inspect(decoded)}")
         if decoded && String.valid?(decoded) && String.trim(decoded) != "" do
           %{field_name => String.trim(decoded)}
         else
           %{}
         end
       %{@get_data_signature => {:ok, result}} ->
-        Logger.info("Got non-binary result: #{inspect(result)}")
         %{}
       %{@get_data_signature => error} ->
-        Logger.info("Got error result: #{inspect(error)}")
         %{}
       _ ->
-        Logger.info("No matching getData signature in result")
         %{}
     end
   end
 
   defp decode_lsp_bytes(<<"0x", hex_data::binary>>) do
-    Logger.info("LSP data starts with 0x, hex length: #{byte_size(hex_data)}")
     decode_lsp_bytes_from_hex(hex_data)
   end
 
   defp decode_lsp_bytes(data) when is_binary(data) do
-    Logger.info("LSP raw data received, byte size: #{byte_size(data)}, first bytes: #{inspect(binary_part(data, 0, min(10, byte_size(data))))}")
-
     # Check if it looks like hex string (all characters are hex digits)
     if String.match?(data, ~r/^[0-9a-fA-F]+$/) do
-      Logger.info("Data appears to be hex string, attempting hex decode")
       decode_lsp_bytes_from_hex(data)
     else
       # Data is already raw bytes, try to decode directly
-      Logger.info("Data appears to be raw bytes, attempting direct ABI decode")
       decode_lsp_bytes_from_raw(data)
     end
   end
@@ -642,12 +614,10 @@ defmodule Explorer.Token.MetadataRetriever do
         {:ok, raw_bytes} ->
           decode_lsp_bytes_from_raw(raw_bytes)
         :error ->
-          Logger.info("Failed to decode as hex, attempting direct decode")
           decode_lsp_bytes_from_raw(hex_data)
       end
     rescue
       e ->
-        Logger.info("Error in hex decode: #{inspect(e)}")
         nil
     end
   end
@@ -657,13 +627,10 @@ defmodule Explorer.Token.MetadataRetriever do
       # First try to decode as ABI-encoded string
       case TypeDecoder.decode_raw(raw_bytes, [:string]) do
         [decoded_string] when is_binary(decoded_string) ->
-          Logger.info("Successfully decoded LSP data as ABI: #{inspect(decoded_string)}")
           decoded_string
         result ->
-          Logger.info("Unexpected ABI decode result: #{inspect(result)}, trying plain string")
           # If ABI decoding fails, check if it's already a plain string
           if String.valid?(raw_bytes) do
-            Logger.info("Data is plain string: #{inspect(raw_bytes)}")
             String.trim(raw_bytes)
           else
             nil
@@ -673,13 +640,11 @@ defmodule Explorer.Token.MetadataRetriever do
       MatchError ->
         # This often happens when the data is already a plain string
         if String.valid?(raw_bytes) do
-          Logger.info("Data is plain string (from MatchError): #{inspect(raw_bytes)}")
           String.trim(raw_bytes)
         else
           nil
         end
       e ->
-        Logger.info("Error decoding LSP data: #{inspect(e)}")
         nil
     end
   end
@@ -834,8 +799,6 @@ defmodule Explorer.Token.MetadataRetriever do
     if error =~ "execution reverted" or error =~ @vm_execution_error do
       {:error, @vm_execution_error}
     else
-      Logger.warning(["Unknown metadata format error #{inspect(error)}."], fetcher: :token_instances)
-
       # truncate error since it will be stored in DB
       {:error, truncate_error(error)}
     end
