@@ -538,16 +538,24 @@ defmodule Indexer.Transform.TokenTransfers do
                contract_address_hash: Hash.Address.t(),
                type: String.t()
              }, map()}
-  defp parse_lsp8_params(%{second_topic: operator_topic, third_topic: from_topic, fourth_topic: to_topic, data: data} = log) do
-    # LSP8 Transfer event data contains: bytes32 tokenId, bool force, bytes data
-    # We only care about the tokenId
-    [token_id | _] = decode_data(data, [{:bytes, 32}, :bool, :bytes])
-    
-    # Convert bytes32 to decimal for consistency with other NFT standards
+  defp parse_lsp8_params(%{second_topic: operator_topic, third_topic: from_topic, fourth_topic: token_id_topic, data: data} = log) do
+    # LSP8 Transfer event has indexed parameters: operator, from, tokenId (as bytes32)
+    # The 'to' address and other params are in the data field
+    # Data contains: address to, bool force, bytes data
+
+    # Extract the token ID from the fourth topic (it's already a bytes32)
+    token_id = token_id_topic |> String.replace_prefix("0x", "") |> Base.decode16!(case: :mixed)
     token_id_decimal = :binary.decode_unsigned(token_id)
 
+    # Decode the data field to get the 'to' address
+    [to_address_binary | _] = decode_data(data, [:address, :bool, :bytes])
+
+    # Convert binary address to hex string format with proper padding
+    # Pad the address to 32 bytes (64 hex chars) as expected by truncate_address_hash
+    to_address_hex = "0x000000000000000000000000" <> Base.encode16(to_address_binary, case: :lower)
+
     from_address_hash = truncate_address_hash(from_topic)
-    to_address_hash = truncate_address_hash(to_topic)
+    to_address_hash = truncate_address_hash(to_address_hex)
 
     token_transfer = %{
       block_number: log.block_number,

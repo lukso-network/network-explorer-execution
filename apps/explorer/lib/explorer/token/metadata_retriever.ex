@@ -554,8 +554,9 @@ defmodule Explorer.Token.MetadataRetriever do
   defp handle_large_string(nil), do: nil
   defp handle_large_string(string), do: handle_large_string(string, byte_size(string))
 
-  defp handle_large_string(string, size) when size > 255,
-    do: string |> binary_part(0, 255) |> String.chunk(:valid) |> List.first()
+  # Increased limit from 255 to 10,000 since database columns are now TEXT type
+  defp handle_large_string(string, size) when size > 10_000,
+    do: string |> binary_part(0, 10_000) |> String.chunk(:valid) |> List.first()
 
   defp handle_large_string(string, _size), do: string
 
@@ -579,7 +580,9 @@ defmodule Explorer.Token.MetadataRetriever do
         # LSP data is returned as bytes, need to decode it
         decoded = decode_lsp_bytes(bytes_data)
         if decoded && String.valid?(decoded) && String.trim(decoded) != "" do
-          %{field_name => String.trim(decoded)}
+          # Truncate to prevent database errors - tokens table uses TEXT now but safeguard against extremely long values
+          truncated = String.slice(String.trim(decoded), 0, 10_000)
+          %{field_name => truncated}
         else
           %{}
         end
