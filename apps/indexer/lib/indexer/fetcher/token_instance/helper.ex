@@ -114,11 +114,25 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
        end)
        |> NFT.batch_metadata_url_request(Application.get_env(:explorer, :json_rpc_named_arguments))
        |> Enum.zip_reduce(token_instances, [], fn {result, from_base_uri?}, {contract_address_hash, token_id}, acc ->
-         token_id = NFT.prepare_token_id(token_id)
+         token_id_prepared = NFT.prepare_token_id(token_id)
+         token_type = token_types_map[contract_address_hash.bytes]
 
+         # For LSP8, decode the base URI and append token_id inside decode_lsp8_metadata_uri
+         # This returns the complete metadata URI, so we don't set from_base_uri? = true
+         result_processed =
+           if token_type == "LSP8" do
+             case MetadataRetriever.decode_lsp8_metadata_uri(result, token_id_prepared, contract_address_hash) do
+               {:ok, _} = success -> success
+               {:error, _} -> result  # Fall back to original result if LSP8 decoding fails
+             end
+           else
+             result
+           end
+
+         # LSP8 already has full URI with token_id, so don't set from_base_uri? = true
          [
-           {result, normalize_token_id(token_types_map[contract_address_hash.bytes], token_id), contract_address_hash,
-            token_id, from_base_uri?}
+           {result_processed, normalize_token_id(token_type, token_id_prepared), contract_address_hash,
+            token_id_prepared, from_base_uri?}
            | acc
          ]
        end)
@@ -140,6 +154,11 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
   defp normalize_token_id(_token_type, _token_id), do: nil
 
   defp result_to_insert_params({:ok, %{metadata: metadata}}, token_contract_address_hash, token_id) do
+    Logger.info(
+      ["Successfully fetched metadata for LSP8 token, contract: #{to_string(token_contract_address_hash)}, token_id: #{token_id}, has_image: #{inspect(metadata["image"] || metadata["image_url"])}"],
+      fetcher: :token_instances
+    )
+
     %{
       token_id: token_id,
       token_contract_address_hash: token_contract_address_hash,
@@ -151,6 +170,11 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
   end
 
   defp result_to_insert_params({:ok_store_uri, %{metadata: metadata}, uri}, token_contract_address_hash, token_id) do
+    Logger.info(
+      ["Successfully fetched metadata with URI for token, contract: #{to_string(token_contract_address_hash)}, token_id: #{token_id}, uri: #{uri}, has_image: #{inspect(metadata["image"] || metadata["image_url"])}"],
+      fetcher: :token_instances
+    )
+
     %{
       token_id: token_id,
       token_contract_address_hash: token_contract_address_hash,

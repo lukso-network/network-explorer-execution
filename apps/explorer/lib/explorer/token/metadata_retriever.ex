@@ -609,7 +609,14 @@ defmodule Explorer.Token.MetadataRetriever do
     end
   end
 
-  defp decode_lsp_bytes(_), do: nil
+  defp decode_lsp_bytes(data) do
+    Logger.info(
+      ["decode_lsp_bytes received unexpected data type: #{inspect(data)}"],
+      fetcher: :token_instances
+    )
+
+    nil
+  end
 
   defp decode_lsp_bytes_from_hex(hex_data) do
     try do
@@ -627,29 +634,208 @@ defmodule Explorer.Token.MetadataRetriever do
 
   defp decode_lsp_bytes_from_raw(raw_bytes) do
     try do
-      # First try to decode as ABI-encoded string
-      case TypeDecoder.decode_raw(raw_bytes, [:string]) do
-        [decoded_string] when is_binary(decoded_string) ->
-          decoded_string
-        result ->
-          # If ABI decoding fails, check if it's already a plain string
-          if String.valid?(raw_bytes) do
-            String.trim(raw_bytes)
-          else
-            nil
+      # LSP2 VerifiableURI format check
+      # Format: 0x + verification method (bytes4) + verification data (bytes) + actual URI
+      # We need to parse this special format
+      case decode_verifiable_uri(raw_bytes) do
+        {:ok, uri} when is_binary(uri) and uri != "" ->
+          uri
+
+        _ ->
+          # Fall back to standard ABI decoding
+          case TypeDecoder.decode_raw(raw_bytes, [:string]) do
+            [decoded_string] when is_binary(decoded_string) ->
+              decoded_string
+
+            result ->
+              Logger.info(
+                ["ABI decode returned unexpected result: #{inspect(result)}, trying plain string. Raw bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
+                fetcher: :token_instances
+              )
+
+              # If ABI decoding fails, check if it's already a plain string
+              if String.valid?(raw_bytes) do
+                String.trim(raw_bytes)
+              else
+                Logger.info(
+                  ["Raw bytes are not valid UTF-8 string. Bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
+                  fetcher: :token_instances
+                )
+
+                nil
+              end
           end
       end
     rescue
       MatchError ->
+        Logger.info(
+          ["MatchError in ABI decode, trying plain string. Raw bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
+          fetcher: :token_instances
+        )
+
         # This often happens when the data is already a plain string
         if String.valid?(raw_bytes) do
           String.trim(raw_bytes)
         else
+          Logger.info(
+            ["Raw bytes are not valid UTF-8 string after MatchError. Bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
+            fetcher: :token_instances
+          )
+
           nil
         end
+
       e ->
+        Logger.info(
+          ["Exception in decode_lsp_bytes_from_raw: #{inspect(e)}. Raw bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
+          fetcher: :token_instances
+        )
+
         nil
     end
+  end
+
+  @doc """
+  Decodes LSP2 VerifiableURI format.
+  Format: verification method + verification data + URI data
+
+  The actual format varies by verification method:
+  - 0x00008019f9b10000 (8 bytes) = keccak256(utf8) - NO hash stored, URI data follows directly
+  - 0x00006f357c6a0000 (8 bytes) = keccak256(bytes) - NO hash stored, URI data follows directly
+  - 0x0000000000000000 (8 bytes) = No verification - URI data follows directly
+
+  ## Returns
+    - `{:ok, uri}` if successfully decoded
+    - `{:error, reason}` if failed
+  """
+  @spec decode_verifiable_uri(binary()) :: {:ok, String.t()} | {:error, String.t()}
+  defp decode_verifiable_uri(data) when byte_size(data) < 8 do
+    {:error, "Data too short for VerifiableURI"}
+  end
+
+  defp decode_verifiable_uri(<<verification_method::binary-size(8), uri_data::binary>>) do
+    case verification_method do
+      # keccak256(utf8) - 0x00008019f9b10000
+      <<0x00, 0x00, 0x80, 0x19, 0xF9, 0xB1, 0x00, 0x00>> ->
+        decode_uri_data(uri_data)
+
+      # keccak256(bytes) - 0x00006f357c6a0000
+      <<0x00, 0x00, 0x6F, 0x35, 0x7C, 0x6A, 0x00, 0x00>> ->
+        decode_uri_data(uri_data)
+
+      # No verification - 0x0000000000000000
+      <<0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> ->
+        decode_uri_data(uri_data)
+
+      _ ->
+        # Unknown verification method, try to decode as-is
+        {:error, "Unknown verification method: 0x#{Base.encode16(verification_method, case: :lower)}"}
+    end
+  end
+
+  defp decode_uri_data(data) when byte_size(data) == 0, do: {:error, "Empty URI data"}
+
+  defp decode_uri_data(data) do
+    # Try to decode as UTF-8 string
+    case :unicode.characters_to_binary(data, :utf8) do
+      decoded when is_binary(decoded) ->
+        {:ok, String.trim(decoded)}
+
+      _ ->
+        {:error, "URI data is not valid UTF-8"}
+    end
+  end
+
+  @doc """
+  Decodes LSP8 base URI from getData response and constructs full metadata URI.
+  LSP8 stores a base URI in getData(LSP8TokenMetadataBaseURI).
+  This function decodes the base URI and appends the token_id to create the full metadata URI.
+
+  ## Parameters
+    - result: The result from getData contract call
+    - token_id: The token ID to append to the base URI
+    - contract_address: The token contract address (optional, for logging)
+
+  ## Returns
+    - `{:ok, [full_metadata_uri]}` with token_id already appended
+    - `{:error, reason}` if failed
+  """
+  @spec decode_lsp8_metadata_uri(any(), integer() | Decimal.t(), any()) :: {:ok, [String.t()]} | {:error, String.t()}
+  def decode_lsp8_metadata_uri(result, token_id, contract_address \\ nil)
+
+  def decode_lsp8_metadata_uri({:ok, [bytes_data]}, token_id, contract_address) when is_binary(bytes_data) do
+    # Log raw bytes for debugging
+    bytes_hex = Base.encode16(bytes_data, case: :lower)
+
+    Logger.info(
+      ["Decoding LSP8 base URI from bytes: 0x#{bytes_hex}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
+      fetcher: :token_instances
+    )
+
+    case decode_lsp_bytes(bytes_data) do
+      base_uri when is_binary(base_uri) and base_uri != "" ->
+        # Append token_id to base URI to create full metadata URI
+        base_uri = String.trim(base_uri)
+
+        # Add token_id to the base URI
+        full_uri = if String.ends_with?(base_uri, "/") do
+          base_uri <> to_string(token_id)
+        else
+          base_uri <> "/" <> to_string(token_id)
+        end
+
+        Logger.info(
+          ["Successfully decoded LSP8 metadata URI: #{full_uri}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
+          fetcher: :token_instances
+        )
+
+        {:ok, [full_uri]}
+
+      nil ->
+        # Convert bytes to hex string for logging
+        bytes_hex = Base.encode16(bytes_data, case: :lower)
+
+        Logger.info(
+          ["Failed to decode LSP8 base URI from bytes: 0x#{bytes_hex}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
+          fetcher: :token_instances
+        )
+
+        {:error, "Failed to decode LSP8 base URI"}
+
+      "" ->
+        Logger.info(
+          ["LSP8 base URI is empty, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
+          fetcher: :token_instances
+        )
+
+        {:error, "LSP8 base URI is empty"}
+
+      other ->
+        Logger.info(
+          ["Unexpected LSP8 base URI decode result: #{inspect(other)}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
+          fetcher: :token_instances
+        )
+
+        {:error, "Failed to decode LSP8 base URI"}
+    end
+  end
+
+  def decode_lsp8_metadata_uri({:error, error}, token_id, contract_address) do
+    Logger.info(
+      ["LSP8 getData returned error: #{inspect(error)}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
+      fetcher: :token_instances
+    )
+
+    {:error, error}
+  end
+
+  def decode_lsp8_metadata_uri(result, token_id, contract_address) do
+    Logger.info(
+      ["Invalid getData response format for LSP8: #{inspect(result)}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
+      fetcher: :token_instances
+    )
+
+    {:error, "Invalid getData response"}
   end
 
   @doc """
@@ -860,7 +1046,20 @@ defmodule Explorer.Token.MetadataRetriever do
   end
 
   defp fetch_json_from_uri({:ok, [token_uri_string]}, ipfs_params, token_id, hex_token_id, from_base_uri?) do
-    fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?)
+    result = fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?)
+
+    # Process LSP4Metadata structure if present
+    case result do
+      {:ok, %{metadata: metadata}} ->
+        process_lsp4_metadata(metadata, token_uri_string)
+
+      {:ok_store_uri, %{metadata: metadata}, uri} ->
+        processed_metadata = normalize_lsp4_metadata(metadata)
+        {:ok_store_uri, %{metadata: processed_metadata}, uri}
+
+      other ->
+        other
+    end
   end
 
   defp fetch_json_from_uri(uri, _ipfs_params, _token_id, _hex_token_id, _from_base_uri?) do
@@ -868,6 +1067,123 @@ defmodule Explorer.Token.MetadataRetriever do
 
     {:error, "unknown metadata uri format"}
   end
+
+  defp process_lsp4_metadata(metadata, uri) do
+    {:ok_store_uri, %{metadata: normalize_lsp4_metadata(metadata)}, uri}
+  end
+
+  @doc """
+  Normalizes LSP4Metadata structure to be compatible with standard NFT metadata format.
+
+  BlockScout uses these metadata fields:
+  - metadata (entire object stored)
+  - image_url / image (extracted for display)
+  - animation_url (for videos/animations)
+  - external_app_url / external_url (external links)
+  - name, description, attributes (displayed in UI)
+
+  LSP4Metadata structure:
+  - LSP4Metadata.name → name
+  - LSP4Metadata.description → description
+  - LSP4Metadata.images → image / image_url
+  - LSP4Metadata.icon → image / image_url (fallback)
+  - LSP4Metadata.links → external_url
+  - LSP4Metadata.attributes → attributes
+  - LSP4Metadata.assets → assets (videos/3D models)
+
+  ## Parameters
+    - metadata: The raw metadata map
+
+  ## Returns
+    - Normalized metadata map with standard NFT metadata fields
+  """
+  @spec normalize_lsp4_metadata(map()) :: map()
+  def normalize_lsp4_metadata(%{"LSP4Metadata" => lsp4_data} = metadata) when is_map(lsp4_data) do
+    # Extract and normalize fields
+    normalized =
+      %{}
+      |> Map.put("name", lsp4_data["name"])
+      |> Map.put("description", lsp4_data["description"])
+      |> Map.put("attributes", normalize_lsp4_attributes(lsp4_data["attributes"]))
+      |> Map.put("image", extract_lsp4_image_url(lsp4_data))
+      |> Map.put("image_url", extract_lsp4_image_url(lsp4_data))
+      |> Map.put("animation_url", extract_lsp4_animation_url(lsp4_data))
+      |> Map.put("external_url", extract_lsp4_external_url(lsp4_data))
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    # Merge normalized fields with original metadata, keeping LSP4Metadata for reference
+    Map.merge(metadata, normalized)
+  end
+
+  def normalize_lsp4_metadata(metadata), do: metadata
+
+  defp extract_lsp4_image_url(%{"images" => images}) when is_list(images) and length(images) > 0 do
+    # images is an array of arrays, get the first image from the first array
+    case List.first(images) do
+      [first_image | _] when is_map(first_image) -> Map.get(first_image, "url")
+      first_image when is_map(first_image) -> Map.get(first_image, "url")
+      _ -> extract_lsp4_icon_url(images)
+    end
+  end
+
+  defp extract_lsp4_image_url(%{"icon" => icons}), do: extract_lsp4_icon_url(icons)
+  defp extract_lsp4_image_url(lsp4_data) when is_map(lsp4_data), do: extract_lsp4_icon_url(lsp4_data["icon"])
+  defp extract_lsp4_image_url(_), do: nil
+
+  defp extract_lsp4_icon_url(icons) when is_list(icons) and length(icons) > 0 do
+    # icon is an array of different sizes, get the largest or first one
+    case List.first(icons) do
+      icon when is_map(icon) -> Map.get(icon, "url")
+      _ -> nil
+    end
+  end
+
+  defp extract_lsp4_icon_url(_), do: nil
+
+  defp extract_lsp4_animation_url(%{"assets" => assets}) when is_list(assets) and length(assets) > 0 do
+    # assets can contain videos or 3D models
+    # Find first video or animation asset
+    case Enum.find(assets, fn asset ->
+           case asset do
+             %{"fileType" => file_type} when is_binary(file_type) ->
+               String.starts_with?(file_type, "video/") or String.starts_with?(file_type, "model/")
+
+             _ ->
+               false
+           end
+         end) do
+      %{"url" => url} -> url
+      _ -> nil
+    end
+  end
+
+  defp extract_lsp4_animation_url(_), do: nil
+
+  defp extract_lsp4_external_url(%{"links" => links}) when is_list(links) and length(links) > 0 do
+    # links is an array of objects with title and url
+    # Return the first link's URL
+    case List.first(links) do
+      %{"url" => url} -> url
+      _ -> nil
+    end
+  end
+
+  defp extract_lsp4_external_url(_), do: nil
+
+  defp normalize_lsp4_attributes(attributes) when is_list(attributes) do
+    # LSP4 attributes have format: [{"key": "trait_type", "value": "value", "type": "string"}]
+    # Standard NFT attributes: [{"trait_type": "...", "value": "..."}]
+    Enum.map(attributes, fn
+      %{"key" => key, "value" => value} ->
+        %{"trait_type" => key, "value" => value}
+
+      attr ->
+        attr
+    end)
+  end
+
+  defp normalize_lsp4_attributes(_), do: nil
 
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?) do
@@ -1014,12 +1330,22 @@ defmodule Explorer.Token.MetadataRetriever do
   defp fetch_metadata_from_uri_request(uri, hex_token_id, ipfs_params) do
     headers = if ipfs?(ipfs_params), do: ipfs_headers(), else: @default_headers
 
+    Logger.info(
+      ["Fetching metadata from URI: #{uri}"],
+      fetcher: :token_instances
+    )
+
     case HttpClient.get(uri, headers,
            recv_timeout: 30_000,
            follow_redirect: true,
            pool: :token_instance_fetcher
          ) do
       {:ok, %{body: body, status_code: 200, headers: response_headers}} ->
+        Logger.info(
+          ["Successfully fetched metadata from URI: #{uri}, body length: #{byte_size(body)}"],
+          fetcher: :token_instances
+        )
+
         content_type = get_content_type_from_headers(response_headers)
 
         case check_content_type(content_type, uri, hex_token_id, body, ipfs_params) do
@@ -1027,12 +1353,17 @@ defmodule Explorer.Token.MetadataRetriever do
             process_result(metadata, uri, ipfs_params)
 
           {:error, reason} ->
+            Logger.info(
+              ["Content type check failed for URI: #{uri}, reason: #{inspect(reason)}"],
+              fetcher: :token_instances
+            )
+
             {:error, reason}
         end
 
       {:ok, %{body: body, status_code: code}} ->
-        Logger.debug(
-          ["Request to token uri: #{inspect(uri)} failed with code #{code}. Body:", inspect(body)],
+        Logger.info(
+          ["Request to token uri: #{inspect(uri)} failed with code #{code}. Body: #{inspect(body)}"],
           fetcher: :token_instances
         )
 
