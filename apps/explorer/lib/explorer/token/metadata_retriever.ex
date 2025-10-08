@@ -160,7 +160,6 @@ defmodule Explorer.Token.MetadataRetriever do
   # 54f6127f = keccak256(getData(bytes32))
   @get_data_signature "54f6127f"
   
-  # LSP2 Data Keys for LSP7/8 tokens
   # LSP4TokenName: keccak256('LSP4TokenName')
   @lsp4_token_name_key "0xdeba1e292f8ba88238e10ab3c7f88bd4be4fac56cad5194b6ecceaf653468af1"
   # LSP4TokenSymbol: keccak256('LSP4TokenSymbol')
@@ -261,7 +260,6 @@ defmodule Explorer.Token.MetadataRetriever do
         |> Enum.reverse()
       end
     
-    # Try LSP metadata for tokens missing name or symbol
     final_result =
       processed_result
       |> Enum.map(fn token ->
@@ -286,7 +284,6 @@ defmodule Explorer.Token.MetadataRetriever do
       raw_metadata
       |> format_contract_functions_result(contract_address_hash)
 
-    # Try ERC-1155 specific fetching
     metadata = try_to_fetch_erc_1155_name(base_metadata, contract_address_hash, type)
 
     # Try LSP7/8 fetching if we don't have name or symbol
@@ -334,11 +331,9 @@ defmodule Explorer.Token.MetadataRetriever do
   end
 
   defp try_to_fetch_lsp_metadata(base_metadata, contract_address_hash) do
-    # Only try LSP if we're missing name or symbol
     if (!Map.has_key?(base_metadata, :name) || !Map.has_key?(base_metadata, :symbol)) do
       lsp_metadata = %{}
 
-      # Try to fetch name via getData if we don't have it
       lsp_metadata =
         if !Map.has_key?(base_metadata, :name) do
           raw_result = fetch_functions_from_contract(contract_address_hash, @lsp_get_data_name_function)
@@ -349,7 +344,6 @@ defmodule Explorer.Token.MetadataRetriever do
           lsp_metadata
         end
 
-      # Try to fetch symbol via getData if we don't have it
       lsp_metadata =
         if !Map.has_key?(base_metadata, :symbol) do
           raw_result = fetch_functions_from_contract(contract_address_hash, @lsp_get_data_symbol_function)
@@ -360,7 +354,6 @@ defmodule Explorer.Token.MetadataRetriever do
           lsp_metadata
         end
 
-      # Merge LSP metadata with base metadata
       Map.merge(base_metadata, lsp_metadata)
     else
       base_metadata
@@ -577,10 +570,8 @@ defmodule Explorer.Token.MetadataRetriever do
   defp format_lsp_data_result(contract_result, field_name) do
     case contract_result do
       %{@get_data_signature => {:ok, [bytes_data]}} when is_binary(bytes_data) ->
-        # LSP data is returned as bytes, need to decode it
         decoded = decode_lsp_bytes(bytes_data)
         if decoded && String.valid?(decoded) && String.trim(decoded) != "" do
-          # Truncate to prevent database errors - tokens table uses TEXT now but safeguard against extremely long values
           truncated = String.slice(String.trim(decoded), 0, 10_000)
           %{field_name => truncated}
         else
@@ -600,21 +591,14 @@ defmodule Explorer.Token.MetadataRetriever do
   end
 
   defp decode_lsp_bytes(data) when is_binary(data) do
-    # Check if it looks like hex string (all characters are hex digits)
     if String.match?(data, ~r/^[0-9a-fA-F]+$/) do
       decode_lsp_bytes_from_hex(data)
     else
-      # Data is already raw bytes, try to decode directly
       decode_lsp_bytes_from_raw(data)
     end
   end
 
   defp decode_lsp_bytes(data) do
-    Logger.info(
-      ["decode_lsp_bytes received unexpected data type: #{inspect(data)}"],
-      fetcher: :token_instances
-    )
-
     nil
   end
 
@@ -634,63 +618,32 @@ defmodule Explorer.Token.MetadataRetriever do
 
   defp decode_lsp_bytes_from_raw(raw_bytes) do
     try do
-      # LSP2 VerifiableURI format check
-      # Format: 0x + verification method (bytes4) + verification data (bytes) + actual URI
-      # We need to parse this special format
       case decode_verifiable_uri(raw_bytes) do
         {:ok, uri} when is_binary(uri) and uri != "" ->
           uri
 
         _ ->
-          # Fall back to standard ABI decoding
           case TypeDecoder.decode_raw(raw_bytes, [:string]) do
             [decoded_string] when is_binary(decoded_string) ->
               decoded_string
 
             result ->
-              Logger.info(
-                ["ABI decode returned unexpected result: #{inspect(result)}, trying plain string. Raw bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
-                fetcher: :token_instances
-              )
-
-              # If ABI decoding fails, check if it's already a plain string
               if String.valid?(raw_bytes) do
                 String.trim(raw_bytes)
               else
-                Logger.info(
-                  ["Raw bytes are not valid UTF-8 string. Bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
-                  fetcher: :token_instances
-                )
-
                 nil
               end
           end
       end
     rescue
       MatchError ->
-        Logger.info(
-          ["MatchError in ABI decode, trying plain string. Raw bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
-          fetcher: :token_instances
-        )
-
-        # This often happens when the data is already a plain string
         if String.valid?(raw_bytes) do
           String.trim(raw_bytes)
         else
-          Logger.info(
-            ["Raw bytes are not valid UTF-8 string after MatchError. Bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
-            fetcher: :token_instances
-          )
-
           nil
         end
 
       e ->
-        Logger.info(
-          ["Exception in decode_lsp_bytes_from_raw: #{inspect(e)}. Raw bytes (hex): 0x#{Base.encode16(raw_bytes, case: :lower)}"],
-          fetcher: :token_instances
-        )
-
         nil
     end
   end
@@ -736,7 +689,6 @@ defmodule Explorer.Token.MetadataRetriever do
   defp decode_uri_data(data) when byte_size(data) == 0, do: {:error, "Empty URI data"}
 
   defp decode_uri_data(data) do
-    # Try to decode as UTF-8 string
     case :unicode.characters_to_binary(data, :utf8) do
       decoded when is_binary(decoded) ->
         {:ok, String.trim(decoded)}
@@ -764,13 +716,7 @@ defmodule Explorer.Token.MetadataRetriever do
   def decode_lsp8_metadata_uri(result, token_id, contract_address \\ nil)
 
   def decode_lsp8_metadata_uri({:ok, [bytes_data]}, token_id, contract_address) when is_binary(bytes_data) do
-    # Log raw bytes for debugging
     bytes_hex = Base.encode16(bytes_data, case: :lower)
-
-    Logger.info(
-      ["Decoding LSP8 base URI from bytes: 0x#{bytes_hex}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
-      fetcher: :token_instances
-    )
 
     case decode_lsp_bytes(bytes_data) do
       base_uri when is_binary(base_uri) and base_uri != "" ->
@@ -784,57 +730,26 @@ defmodule Explorer.Token.MetadataRetriever do
           base_uri <> "/" <> to_string(token_id)
         end
 
-        Logger.info(
-          ["Successfully decoded LSP8 metadata URI: #{full_uri}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
-          fetcher: :token_instances
-        )
-
         {:ok, [full_uri]}
 
       nil ->
-        # Convert bytes to hex string for logging
         bytes_hex = Base.encode16(bytes_data, case: :lower)
-
-        Logger.info(
-          ["Failed to decode LSP8 base URI from bytes: 0x#{bytes_hex}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
-          fetcher: :token_instances
-        )
 
         {:error, "Failed to decode LSP8 base URI"}
 
       "" ->
-        Logger.info(
-          ["LSP8 base URI is empty, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
-          fetcher: :token_instances
-        )
-
         {:error, "LSP8 base URI is empty"}
 
       other ->
-        Logger.info(
-          ["Unexpected LSP8 base URI decode result: #{inspect(other)}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
-          fetcher: :token_instances
-        )
-
         {:error, "Failed to decode LSP8 base URI"}
     end
   end
 
   def decode_lsp8_metadata_uri({:error, error}, token_id, contract_address) do
-    Logger.info(
-      ["LSP8 getData returned error: #{inspect(error)}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
-      fetcher: :token_instances
-    )
-
     {:error, error}
   end
 
   def decode_lsp8_metadata_uri(result, token_id, contract_address) do
-    Logger.info(
-      ["Invalid getData response format for LSP8: #{inspect(result)}, contract: #{to_string(contract_address)}, token_id: #{token_id}"],
-      fetcher: :token_instances
-    )
-
     {:error, "Invalid getData response"}
   end
 
@@ -987,7 +902,9 @@ defmodule Explorer.Token.MetadataRetriever do
 
     if error =~ "execution reverted" or error =~ @vm_execution_error do
       {:error, @vm_execution_error}
-    else
+    else      
+      Logger.warning(["Unknown metadata format error #{inspect(error)}."], fetcher: :token_instances)
+
       # truncate error since it will be stored in DB
       {:error, truncate_error(error)}
     end
@@ -1048,7 +965,6 @@ defmodule Explorer.Token.MetadataRetriever do
   defp fetch_json_from_uri({:ok, [token_uri_string]}, ipfs_params, token_id, hex_token_id, from_base_uri?) do
     result = fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?)
 
-    # Process LSP4Metadata structure if present
     case result do
       {:ok, %{metadata: metadata}} ->
         process_lsp4_metadata(metadata, token_uri_string)
@@ -1099,7 +1015,6 @@ defmodule Explorer.Token.MetadataRetriever do
   """
   @spec normalize_lsp4_metadata(map()) :: map()
   def normalize_lsp4_metadata(%{"LSP4Metadata" => lsp4_data} = metadata) when is_map(lsp4_data) do
-    # Extract and normalize fields
     normalized =
       %{}
       |> Map.put("name", lsp4_data["name"])
@@ -1112,7 +1027,6 @@ defmodule Explorer.Token.MetadataRetriever do
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
-    # Merge normalized fields with original metadata, keeping LSP4Metadata for reference
     Map.merge(metadata, normalized)
   end
 
@@ -1172,8 +1086,6 @@ defmodule Explorer.Token.MetadataRetriever do
   defp extract_lsp4_external_url(_), do: nil
 
   defp normalize_lsp4_attributes(attributes) when is_list(attributes) do
-    # LSP4 attributes have format: [{"key": "trait_type", "value": "value", "type": "string"}]
-    # Standard NFT attributes: [{"trait_type": "...", "value": "..."}]
     Enum.map(attributes, fn
       %{"key" => key, "value" => value} ->
         %{"trait_type" => key, "value" => value}
@@ -1330,22 +1242,12 @@ defmodule Explorer.Token.MetadataRetriever do
   defp fetch_metadata_from_uri_request(uri, hex_token_id, ipfs_params) do
     headers = if ipfs?(ipfs_params), do: ipfs_headers(), else: @default_headers
 
-    Logger.info(
-      ["Fetching metadata from URI: #{uri}"],
-      fetcher: :token_instances
-    )
-
     case HttpClient.get(uri, headers,
            recv_timeout: 30_000,
            follow_redirect: true,
            pool: :token_instance_fetcher
          ) do
       {:ok, %{body: body, status_code: 200, headers: response_headers}} ->
-        Logger.info(
-          ["Successfully fetched metadata from URI: #{uri}, body length: #{byte_size(body)}"],
-          fetcher: :token_instances
-        )
-
         content_type = get_content_type_from_headers(response_headers)
 
         case check_content_type(content_type, uri, hex_token_id, body, ipfs_params) do
@@ -1353,17 +1255,12 @@ defmodule Explorer.Token.MetadataRetriever do
             process_result(metadata, uri, ipfs_params)
 
           {:error, reason} ->
-            Logger.info(
-              ["Content type check failed for URI: #{uri}, reason: #{inspect(reason)}"],
-              fetcher: :token_instances
-            )
-
             {:error, reason}
         end
 
       {:ok, %{body: body, status_code: code}} ->
-        Logger.info(
-          ["Request to token uri: #{inspect(uri)} failed with code #{code}. Body: #{inspect(body)}"],
+        Logger.debug(
+          ["Request to token uri: #{inspect(uri)} failed with code #{code}. Body:", inspect(body)],
           fetcher: :token_instances
         )
 

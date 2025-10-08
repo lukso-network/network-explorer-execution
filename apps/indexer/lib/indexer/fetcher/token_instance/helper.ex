@@ -154,11 +154,6 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
   defp normalize_token_id(_token_type, _token_id), do: nil
 
   defp result_to_insert_params({:ok, %{metadata: metadata}}, token_contract_address_hash, token_id) do
-    Logger.info(
-      ["Successfully fetched metadata for LSP8 token, contract: #{to_string(token_contract_address_hash)}, token_id: #{token_id}, has_image: #{inspect(metadata["image"] || metadata["image_url"])}"],
-      fetcher: :token_instances
-    )
-
     %{
       token_id: token_id,
       token_contract_address_hash: token_contract_address_hash,
@@ -170,11 +165,6 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
   end
 
   defp result_to_insert_params({:ok_store_uri, %{metadata: metadata}, uri}, token_contract_address_hash, token_id) do
-    Logger.info(
-      ["Successfully fetched metadata with URI for token, contract: #{to_string(token_contract_address_hash)}, token_id: #{token_id}, uri: #{uri}, has_image: #{inspect(metadata["image"] || metadata["image_url"])}"],
-      fetcher: :token_instances
-    )
-
     %{
       token_id: token_id,
       token_contract_address_hash: token_contract_address_hash,
