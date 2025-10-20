@@ -34,6 +34,13 @@ defmodule BlockScoutWeb do
         only: [proxy_implementations_association: 0, proxy_implementations_smart_contracts_association: 0]
 
       alias BlockScoutWeb.Routers.AdminRouter.Helpers, as: AdminRoutes
+
+      alias BlockScoutWeb.Schemas.API.V2, as: Schemas
+      alias OpenApiSpex.{Schema, Reference}
+      alias OpenApiSpex.JsonErrorResponse
+      alias Schemas.ErrorResponses.ForbiddenResponse
+
+      import BlockScoutWeb.Schemas.API.V2.General
     end
   end
 
@@ -43,11 +50,10 @@ defmodule BlockScoutWeb do
         root: "lib/block_scout_web/templates",
         namespace: BlockScoutWeb
 
-      # Import convenience functions from controllers
-      import Phoenix.Controller, only: [get_flash: 2, view_module: 1]
-
       # Use all HTML functionality (forms, tags, etc)
-      use Phoenix.HTML
+      import Phoenix.HTML
+      import Phoenix.HTML.Form
+      use PhoenixHTMLHelpers
 
       import BlockScoutWeb.{
         CurrencyHelper,

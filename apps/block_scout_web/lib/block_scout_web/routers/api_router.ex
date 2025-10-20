@@ -34,7 +34,7 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
     UtilsApiV2Router
   }
 
-  alias BlockScoutWeb.Plug.{CheckApiV2, CheckFeature, RateLimit}
+  alias BlockScoutWeb.Plug.{CheckApiV2, CheckFeature}
   alias BlockScoutWeb.Routers.AccountRouter
 
   @max_query_string_length 5_000
@@ -75,7 +75,7 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
     plug(CheckApiV2)
     plug(:fetch_session)
     plug(:protect_from_forgery)
-    plug(RateLimit)
+    plug(OpenApiSpex.Plug.PutApiSpec, module: BlockScoutWeb.ApiSpec)
   end
 
   pipeline :api_v2_no_session do
@@ -90,7 +90,6 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
     plug(BlockScoutWeb.Plug.Logger, application: :api_v2)
     plug(:accepts, ["json"])
     plug(CheckApiV2)
-    plug(RateLimit)
   end
 
   pipeline :api_v1_graphql do
@@ -103,7 +102,6 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
 
     plug(BlockScoutWeb.Plug.Logger, application: :api)
     plug(:accepts, ["json"])
-    plug(RateLimit, graphql?: true)
     plug(BlockScoutWeb.Plug.GraphQLSchemaIntrospection)
   end
 
@@ -130,6 +128,7 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
 
   scope "/v2", as: :api_v2 do
     pipe_through(:api_v2)
+    get("/openapi", OpenApiSpex.Plug.RenderSpec, [])
 
     scope "/search" do
       get("/", V2.SearchController, :search)
@@ -142,7 +141,7 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
       get("/csv-export", V2.ConfigController, :csv_export)
       get("/public-metrics", V2.ConfigController, :public_metrics)
 
-      chain_scope :celo do
+      if @chain_type == :celo do
         get("/celo", V2.ConfigController, :celo)
       end
     end
@@ -191,6 +190,10 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
       if @chain_type == :ethereum do
         get("/:transaction_hash_param/blobs", V2.TransactionController, :blobs)
       end
+
+      if @chain_type == :ethereum do
+        get("/:transaction_hash_param/beacon/deposits", V2.TransactionController, :beacon_deposits)
+      end
     end
 
     scope "/token-transfers" do
@@ -203,26 +206,26 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
 
     scope "/blocks" do
       get("/", V2.BlockController, :blocks)
-      get("/:block_hash_or_number", V2.BlockController, :block)
-      get("/:block_hash_or_number/transactions", V2.BlockController, :transactions)
-      get("/:block_hash_or_number/internal-transactions", V2.BlockController, :internal_transactions)
-      get("/:block_hash_or_number/withdrawals", V2.BlockController, :withdrawals)
+      get("/:block_hash_or_number_param", V2.BlockController, :block)
+      get("/:block_hash_or_number_param/transactions", V2.BlockController, :transactions)
+      get("/:block_hash_or_number_param/internal-transactions", V2.BlockController, :internal_transactions)
+      get("/:block_hash_or_number_param/withdrawals", V2.BlockController, :withdrawals)
+      get("/:block_number_param/countdown", V2.BlockController, :block_countdown)
 
       if @chain_type == :arbitrum do
-        get("/arbitrum-batch/:batch_number", V2.BlockController, :arbitrum_batch)
-      end
-
-      if @chain_type == :celo do
-        get("/:block_hash_or_number/epoch", V2.BlockController, :celo_epoch)
-        get("/:block_hash_or_number/election-rewards/:reward_type", V2.BlockController, :celo_election_rewards)
+        get("/arbitrum-batch/:batch_number_param", V2.BlockController, :arbitrum_batch)
       end
 
       if @chain_type == :optimism do
-        get("/optimism-batch/:batch_number", V2.BlockController, :optimism_batch)
+        get("/optimism-batch/:batch_number_param", V2.BlockController, :optimism_batch)
       end
 
       if @chain_type == :scroll do
-        get("/scroll-batch/:batch_number", V2.BlockController, :scroll_batch)
+        get("/scroll-batch/:batch_number_param", V2.BlockController, :scroll_batch)
+      end
+
+      if @chain_type == :ethereum do
+        get("/:block_hash_or_number_param/beacon/deposits", V2.BlockController, :beacon_deposits)
       end
     end
 
@@ -249,8 +252,12 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
       get("/:address_hash_param/nft/collections", V2.AddressController, :nft_collections)
 
       if @chain_type == :celo do
-        get("/:address_hash_param/election-rewards", V2.AddressController, :celo_election_rewards)
-        get("/:address_hash_param/election-rewards/csv", V2.CsvExportController, :celo_election_rewards_csv)
+        get("/:address_hash_param/celo/election-rewards", V2.AddressController, :celo_election_rewards)
+        get("/:address_hash_param/celo/election-rewards/csv", V2.CsvExportController, :celo_election_rewards_csv)
+      end
+
+      if @chain_type == :ethereum do
+        get("/:address_hash_param/beacon/deposits", V2.AddressController, :beacon_deposits)
       end
     end
 
@@ -291,15 +298,15 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
       end
     end
 
-    scope "/optimism" do
-      if @chain_type == :optimism do
+    if @chain_type == :optimism do
+      scope "/optimism" do
         get("/txn-batches", V2.OptimismController, :transaction_batches)
         get("/txn-batches/count", V2.OptimismController, :transaction_batches_count)
         get("/txn-batches/:l2_block_range_start/:l2_block_range_end", V2.OptimismController, :transaction_batches)
         get("/batches", V2.OptimismController, :batches)
         get("/batches/count", V2.OptimismController, :batches_count)
         get("/batches/da/celestia/:height/:commitment", V2.OptimismController, :batch_by_celestia_blob)
-        get("/batches/:internal_id", V2.OptimismController, :batch_by_internal_id)
+        get("/batches/:number", V2.OptimismController, :batch_by_number)
         get("/output-roots", V2.OptimismController, :output_roots)
         get("/output-roots/count", V2.OptimismController, :output_roots_count)
         get("/deposits", V2.OptimismController, :deposits)
@@ -310,16 +317,16 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
         get("/games/count", V2.OptimismController, :games_count)
         get("/interop/messages", V2.OptimismController, :interop_messages)
         get("/interop/messages/count", V2.OptimismController, :interop_messages_count)
+        get("/interop/messages/:unique_id", V2.OptimismController, :interop_message)
         get("/interop/public-key", V2.OptimismController, :interop_public_key)
       end
     end
 
-    scope "/polygon-edge" do
-      chain_scope :polygon_edge do
-        get("/deposits", V2.PolygonEdgeController, :deposits)
-        get("/deposits/count", V2.PolygonEdgeController, :deposits_count)
-        get("/withdrawals", V2.PolygonEdgeController, :withdrawals)
-        get("/withdrawals/count", V2.PolygonEdgeController, :withdrawals_count)
+    if @chain_type == :celo do
+      scope "/celo/epochs" do
+        get("/", V2.CeloController, :epochs)
+        get("/:number", V2.CeloController, :epoch)
+        get("/:number/election-rewards/:type", V2.CeloController, :election_rewards)
       end
     end
 
@@ -382,27 +389,6 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
         end
       end
 
-      # deprecate in the next major/minor release after 9.0.0
-      scope "/3dparty" do
-        get("/:platform_id", V2.Proxy.UniversalProxyController, :index)
-
-        scope "/noves-fi" do
-          get("/transactions/:transaction_hash_param", V2.Proxy.NovesFiController, :transaction)
-
-          get("/addresses/:address_hash_param/transactions", V2.Proxy.NovesFiController, :address_transactions)
-
-          get("/transaction-descriptions", V2.Proxy.NovesFiController, :describe_transactions)
-        end
-
-        scope "/xname" do
-          get("/addresses/:address_hash_param", V2.Proxy.XnameController, :address)
-        end
-
-        scope "/solidityscan" do
-          get("/smart-contracts/:address_hash/report", V2.SmartContractController, :solidityscan_report)
-        end
-      end
-
       scope "/account-abstraction" do
         get("/operations/:operation_hash_param", V2.Proxy.AccountAbstractionController, :operation)
         get("/operations/:operation_hash_param/summary", V2.Proxy.AccountAbstractionController, :summary)
@@ -421,6 +407,13 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
 
       scope "/metadata" do
         get("/addresses", V2.Proxy.MetadataController, :addresses)
+      end
+    end
+
+    if @chain_type == :ethereum do
+      scope "/beacon" do
+        get("/deposits", V2.Ethereum.DepositController, :list)
+        get("/deposits/count", V2.Ethereum.DepositController, :count)
       end
     end
 
@@ -484,6 +477,7 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
         get("/batches/count", V2.ArbitrumController, :batches_count)
         get("/batches/:batch_number", V2.ArbitrumController, :batch)
         get("/batches/da/anytrust/:data_hash", V2.ArbitrumController, :batch_by_data_availability_info)
+        get("/batches/da/eigenda/:data_hash", V2.ArbitrumController, :batch_by_data_availability_info)
 
         get(
           "/batches/da/celestia/:height/:transaction_commitment",
@@ -522,17 +516,6 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
     # leave the same endpoint in v1 in order to keep backward compatibility
     get("/search", SearchController, :search)
 
-    # todo: remove these old CSV export related endpoints in 7.2.0 or higher since they are moved to /api/v2/** path.
-    # Related frontend task https://github.com/blockscout/frontend/issues/2718.
-    get("/transactions-csv", V2.CsvExportController, :transactions_csv)
-    get("/token-transfers-csv", V2.CsvExportController, :token_transfers_csv)
-    get("/internal-transactions-csv", V2.CsvExportController, :internal_transactions_csv)
-    get("/logs-csv", V2.CsvExportController, :logs_csv)
-
-    if @chain_type == :celo do
-      get("/celo-election-rewards-csv", V2.CsvExportController, :celo_election_rewards_csv)
-    end
-
     get("/gas-price-oracle", GasPriceOracleController, :gas_price_oracle)
 
     if @reading_enabled do
@@ -564,7 +547,6 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
     get("/multichain-search-export", BlockScoutWeb.API.HealthController, :multichain_search_db_export)
   end
 
-  # For backward compatibility. Should be removed
   scope "/" do
     pipe_through(:api)
     alias BlockScoutWeb.API.{EthRPC, RPC}
@@ -572,15 +554,26 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
     if @reading_enabled do
       post("/eth-rpc", EthRPC.EthController, :eth_request)
 
-      forward("/", RPCTranslatorForwarder, %{
-        "block" => {RPC.BlockController, []},
-        "account" => {RPC.AddressController, []},
-        "logs" => {RPC.LogsController, []},
-        "token" => {RPC.TokenController, []},
-        "stats" => {RPC.StatsController, []},
-        "contract" => {RPC.ContractController, [:verify]},
-        "transaction" => {RPC.TransactionController, []}
-      })
+      forward(
+        "/",
+        RPCTranslatorForwarder,
+        %{
+          "block" => {RPC.BlockController, []},
+          "account" => {RPC.AddressController, []},
+          "logs" => {RPC.LogsController, []},
+          "token" => {RPC.TokenController, []},
+          "stats" => {RPC.StatsController, []},
+          "contract" => {RPC.ContractController, [:verify]},
+          "transaction" => {RPC.TransactionController, []}
+        }
+        |> then(fn options ->
+          if @chain_type == :celo do
+            Map.put(options, "epoch", {BlockScoutWeb.API.RPC.CeloController, []})
+          else
+            options
+          end
+        end)
+      )
     end
   end
 end

@@ -7,36 +7,15 @@ defmodule BlockScoutWeb.PagingHelper do
   import Explorer.Chain, only: [string_to_full_hash: 1]
   import Explorer.Chain.SmartContract.Proxy.Models.Implementation, only: [proxy_implementations_association: 0]
 
+  alias BlockScoutWeb.Schemas.API.V2.General
   alias Explorer.Chain.InternalTransaction.CallType, as: InternalTransactionCallType
   alias Explorer.Chain.InternalTransaction.Type, as: InternalTransactionType
-  alias Explorer.Chain.Stability.Validator, as: ValidatorStability
   alias Explorer.Chain.{SmartContract, Transaction}
   alias Explorer.{Helper, PagingOptions, SortingHelper}
 
   @page_size 50
   @default_paging_options %PagingOptions{page_size: @page_size + 1}
   @allowed_filter_labels ["validated", "pending"]
-
-  case @chain_type do
-    :ethereum ->
-      @allowed_type_labels [
-        "coin_transfer",
-        "contract_call",
-        "contract_creation",
-        "token_transfer",
-        "token_creation",
-        "blob_transaction"
-      ]
-
-    _ ->
-      @allowed_type_labels [
-        "coin_transfer",
-        "contract_call",
-        "contract_creation",
-        "token_transfer",
-        "token_creation"
-      ]
-  end
 
   @allowed_token_transfer_type_labels ["ERC-20", "ERC-721", "ERC-1155", "ERC-404"]
   @allowed_nft_type_labels ["ERC-721", "ERC-1155", "ERC-404"]
@@ -74,8 +53,17 @@ defmodule BlockScoutWeb.PagingHelper do
 
   def stability_validators_state_options(_), do: [state: []]
 
+  @doc """
+    Parse 'type' query parameter from request option map
+  """
   @spec token_transfers_types_options(map()) :: [{:token_type, list}]
   def token_transfers_types_options(%{"type" => filters}) do
+    [
+      token_type: filters_to_list(filters, @allowed_token_transfer_type_labels)
+    ]
+  end
+
+  def token_transfers_types_options(%{type: filters}) do
     [
       token_type: filters_to_list(filters, @allowed_token_transfer_type_labels)
     ]
@@ -87,7 +75,7 @@ defmodule BlockScoutWeb.PagingHelper do
     Parse 'type' query parameter from request option map
   """
   @spec nft_types_options(map()) :: [{:token_type, list}]
-  def nft_types_options(%{"type" => filters}) do
+  def nft_types_options(%{type: filters}) do
     [
       token_type: filters_to_list(filters, @allowed_nft_type_labels)
     ]
@@ -117,10 +105,21 @@ defmodule BlockScoutWeb.PagingHelper do
     ]
   end
 
+  def chain_ids_filter_options(%{chain_ids: chain_id}) do
+    [
+      chain_ids:
+        chain_id
+        |> String.split(",")
+        |> Enum.uniq()
+        |> Enum.map(&Helper.parse_integer/1)
+        |> Enum.filter(&Enum.member?(@allowed_chain_id, &1))
+    ]
+  end
+
   def chain_ids_filter_options(_), do: [chain_id: []]
 
   def type_filter_options(%{"type" => type}) do
-    [type: type |> parse_filter(@allowed_type_labels) |> Enum.map(&String.to_existing_atom/1)]
+    [type: type |> parse_filter(General.allowed_transaction_types()) |> Enum.map(&String.to_existing_atom/1)]
   end
 
   def type_filter_options(_params), do: [type: []]
@@ -170,7 +169,7 @@ defmodule BlockScoutWeb.PagingHelper do
     |> Enum.uniq()
   end
 
-  def select_block_type(%{"type" => type}) do
+  def select_block_type(%{type: type}) do
     case String.downcase(type) do
       "uncle" ->
         [
@@ -222,7 +221,16 @@ defmodule BlockScoutWeb.PagingHelper do
   def delete_parameters_from_next_page_params(params) when is_map(params) do
     params
     |> Map.drop([
+      :address_hash_param,
+      :block_hash_or_number_param,
+      :token_id_param,
+      :token_id,
+      :type,
+      :apikey,
+      "apikey",
       "block_hash_or_number",
+      "block_hash_or_number_param",
+      "token_id_param",
       "transaction_hash_param",
       "address_hash_param",
       "type",
@@ -270,23 +278,24 @@ defmodule BlockScoutWeb.PagingHelper do
     [sorting: do_tokens_sorting(sort_field, order)]
   end
 
+  def tokens_sorting(%{sort: sort_field, order: order}) do
+    [sorting: do_tokens_sorting(sort_field, order)]
+  end
+
   def tokens_sorting(_), do: []
 
   defp do_tokens_sorting("fiat_value", "asc"), do: [asc_nulls_first: :fiat_value]
   defp do_tokens_sorting("fiat_value", "desc"), do: [desc_nulls_last: :fiat_value]
   defp do_tokens_sorting("holders_count", "asc"), do: [asc_nulls_first: :holder_count]
   defp do_tokens_sorting("holders_count", "desc"), do: [desc_nulls_last: :holder_count]
-  # todo: Next 2 clauses should be removed in favour `holders_count` property with the next release after 8.0.0
-  defp do_tokens_sorting("holder_count", "asc"), do: [asc_nulls_first: :holder_count]
-  defp do_tokens_sorting("holder_count", "desc"), do: [desc_nulls_last: :holder_count]
   defp do_tokens_sorting("circulating_market_cap", "asc"), do: [asc_nulls_first: :circulating_market_cap]
   defp do_tokens_sorting("circulating_market_cap", "desc"), do: [desc_nulls_last: :circulating_market_cap]
   defp do_tokens_sorting(_, _), do: []
 
-  @spec address_transactions_sorting(%{required(String.t()) => String.t()}) :: [
+  @spec address_transactions_sorting(%{required(atom()) => String.t()}) :: [
           {:sorting, SortingHelper.sorting_params()}
         ]
-  def address_transactions_sorting(%{"sort" => sort_field, "order" => order}) do
+  def address_transactions_sorting(%{sort: sort_field, order: order}) do
     [sorting: do_address_transaction_sorting(sort_field, order)]
   end
 
@@ -330,12 +339,8 @@ defmodule BlockScoutWeb.PagingHelper do
   defp do_validators_stability_sorting("state", "desc"), do: [desc_nulls_last: :state]
   defp do_validators_stability_sorting("address_hash", "asc"), do: [asc_nulls_first: :address_hash]
   defp do_validators_stability_sorting("address_hash", "desc"), do: [desc_nulls_last: :address_hash]
-
-  defp do_validators_stability_sorting("blocks_validated", "asc"),
-    do: [{:dynamic, :blocks_validated, :asc_nulls_first, ValidatorStability.dynamic_validated_blocks()}]
-
-  defp do_validators_stability_sorting("blocks_validated", "desc"),
-    do: [{:dynamic, :blocks_validated, :desc_nulls_last, ValidatorStability.dynamic_validated_blocks()}]
+  defp do_validators_stability_sorting("blocks_validated", "asc"), do: [asc_nulls_first: :blocks_validated]
+  defp do_validators_stability_sorting("blocks_validated", "desc"), do: [desc_nulls_last: :blocks_validated]
 
   defp do_validators_stability_sorting(_, _), do: []
 
@@ -395,7 +400,7 @@ defmodule BlockScoutWeb.PagingHelper do
   @spec addresses_sorting(%{required(String.t()) => String.t()}) :: [
           {:sorting, SortingHelper.sorting_params()}
         ]
-  def addresses_sorting(%{"sort" => sort_field, "order" => order}) do
+  def addresses_sorting(%{sort: sort_field, order: order}) do
     [sorting: do_addresses_sorting(sort_field, order)]
   end
 

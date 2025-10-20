@@ -3,13 +3,14 @@ defmodule BlockScoutWeb.Models.TransactionStateHelper do
     Transaction state changes related functions
   """
 
+  import Explorer.Chain.Address.Reputation, only: [reputation_association: 0]
   import Explorer.PagingOptions, only: [default_paging_options: 0]
   import Explorer.Chain.SmartContract, only: [burn_address_hash_string: 0]
   import Explorer.Chain.SmartContract.Proxy.Models.Implementation, only: [proxy_implementations_association: 0]
 
   alias Explorer.Chain.Transaction.StateChange
   alias Explorer.{Chain, PagingOptions, Repo}
-  alias Explorer.Chain.{BlockNumberHelper, InternalTransaction, Transaction, Wei}
+  alias Explorer.Chain.{Address.CoinBalance, BlockNumberHelper, InternalTransaction, Transaction, Wei}
   alias Explorer.Chain.Cache.StateChanges
   alias Indexer.Fetcher.OnDemand.CoinBalance, as: CoinBalanceOnDemand
   alias Indexer.Fetcher.OnDemand.TokenBalance, as: TokenBalanceOnDemand
@@ -70,6 +71,7 @@ defmodule BlockScoutWeb.Models.TransactionStateHelper do
       |> Enum.find(&(&1.hash == transaction.hash))
       |> Repo.preload(
         token_transfers: [
+          token: reputation_association(),
           from_address: [:scam_badge, :names, :smart_contract, proxy_implementations_association()],
           to_address: [:scam_badge, :names, :smart_contract, proxy_implementations_association()]
         ],
@@ -139,7 +141,7 @@ defmodule BlockScoutWeb.Models.TransactionStateHelper do
   end
 
   defp coin_balance(address_hash, block_number, options) do
-    case Chain.get_coin_balance(address_hash, block_number, options) do
+    case CoinBalance.get_coin_balance(address_hash, block_number, options) do
       %{value: val} when not is_nil(val) ->
         val
 

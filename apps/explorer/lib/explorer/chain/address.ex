@@ -9,6 +9,7 @@ defmodule Explorer.Chain.Address.Schema do
 
   alias Explorer.Chain.{
     Address,
+    Address.Reputation,
     Block,
     Data,
     Hash,
@@ -66,6 +67,18 @@ defmodule Explorer.Chain.Address.Schema do
                             ]
                           end
 
+                        :celo ->
+                          quote do
+                            [
+                              has_one(
+                                :celo_account,
+                                Explorer.Chain.Celo.Account,
+                                foreign_key: :address_hash,
+                                references: :hash
+                              )
+                            ]
+                          end
+
                         _ ->
                           []
                       end)
@@ -110,6 +123,7 @@ defmodule Explorer.Chain.Address.Schema do
         has_many(:names, Address.Name, foreign_key: :address_hash, references: :hash)
         has_one(:scam_badge, Address.ScamBadgeToAddress, foreign_key: :address_hash, references: :hash)
         has_many(:withdrawals, Withdrawal, foreign_key: :address_hash, references: :hash)
+        has_one(:reputation, Reputation, foreign_key: :address_hash, references: :hash)
 
         # In practice, this is a one-to-many relationship, but we only need to check if any signed authorization
         # exists for a given address. This done this way to avoid loading all signed authorizations for an address.
@@ -613,8 +627,8 @@ defmodule Explorer.Chain.Address do
     - `nil` if the contract code hasn't been loaded
   """
   @spec eoa_with_code?(any()) :: boolean() | nil
-  def eoa_with_code?(%__MODULE__{contract_code: %Data{bytes: code}}) do
-    EIP7702.get_delegate_address(code) != nil
+  def eoa_with_code?(%__MODULE__{} = address) do
+    !is_nil(EIP7702.quick_resolve_implementations(address))
   end
 
   def eoa_with_code?(%NotLoaded{}), do: nil
@@ -787,7 +801,7 @@ defmodule Explorer.Chain.Address do
   @doc """
   Creates a query for preloading contract creation internal transactions.
 
-  This query sorts internal transactions by:
+  This query filters for internal transactions with index > 0, sorts them by:
 
   1. error (ascending with nulls first)
   2. block number (descending)
@@ -797,15 +811,18 @@ defmodule Explorer.Chain.Address do
 
   ## Returns
 
-  A `Ecto.Query` that can be used to preload the contract creation internal transaction.
+  A `Ecto.Query` that can be used to preload the contract creation internal
+  transaction.
   """
   @spec contract_creation_internal_transaction_preload_query() :: Ecto.Query.t()
   def contract_creation_internal_transaction_preload_query do
     from(
       it in InternalTransaction,
+      where: it.index > 0,
       order_by: [
         asc_nulls_first: it.error,
-        desc: it.block_number
+        desc: it.block_number,
+        desc: it.block_index
       ],
       limit: 1
     )

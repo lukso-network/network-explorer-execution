@@ -4,12 +4,10 @@ defmodule BlockScoutWeb.API.V2.AdvancedFilterController do
   import BlockScoutWeb.Chain, only: [split_list_by_page: 1, next_page_params: 4, fetch_scam_token_toggle: 2]
   import Explorer.PagingOptions, only: [default_paging_options: 0]
 
-  alias BlockScoutWeb.CaptchaHelper
   alias BlockScoutWeb.API.V2.{AdvancedFilterView, CsvExportController}
   alias Explorer.{Chain, PagingOptions}
-  alias Explorer.Chain.{AdvancedFilter, ContractMethod, Data, Token, Transaction}
+  alias Explorer.Chain.{Address.Reputation, AdvancedFilter, ContractMethod, Data, Token, Transaction}
   alias Explorer.Chain.CsvExport.Helper, as: CsvHelper
-  alias Explorer.Helper, as: ExplorerHelper
   alias Plug.Conn
 
   action_fallback(BlockScoutWeb.API.V2.FallbackController)
@@ -47,6 +45,8 @@ defmodule BlockScoutWeb.API.V2.AdvancedFilterController do
 
   @methods_filter_limit 20
   @tokens_filter_limit 20
+
+  @token_options [api?: true, necessity_by_association: %{Reputation.reputation_association() => :optional}]
 
   @doc """
   Function responsible for `api/v2/advanced-filters/` endpoint.
@@ -88,30 +88,28 @@ defmodule BlockScoutWeb.API.V2.AdvancedFilterController do
   """
   @spec list_csv(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def list_csv(conn, params) do
-    with {:recaptcha, true} <- {:recaptcha, CaptchaHelper.recaptcha_passed?(params)} do
-      full_options =
-        params
-        |> extract_filters()
-        |> Keyword.merge(paging_options(params))
-        |> Keyword.update(:paging_options, %PagingOptions{page_size: CsvHelper.limit()}, fn paging_options ->
-          %PagingOptions{paging_options | page_size: CsvHelper.limit()}
-        end)
-        |> Keyword.put(:timeout, :timer.minutes(5))
-
-      full_options
-      |> AdvancedFilter.list()
-      |> AdvancedFilterView.to_csv_format()
-      |> CsvHelper.dump_to_stream()
-      |> Enum.reduce_while(CsvExportController.put_resp_params(conn), fn chunk, conn ->
-        case Conn.chunk(conn, chunk) do
-          {:ok, conn} ->
-            {:cont, conn}
-
-          {:error, :closed} ->
-            {:halt, conn}
-        end
+    full_options =
+      params
+      |> extract_filters()
+      |> Keyword.merge(paging_options(params))
+      |> Keyword.update(:paging_options, %PagingOptions{page_size: CsvHelper.limit()}, fn paging_options ->
+        %PagingOptions{paging_options | page_size: CsvHelper.limit()}
       end)
-    end
+      |> Keyword.put(:timeout, :timer.minutes(5))
+
+    full_options
+    |> AdvancedFilter.list()
+    |> AdvancedFilterView.to_csv_format()
+    |> CsvHelper.dump_to_stream()
+    |> Enum.reduce_while(CsvExportController.put_resp_params(conn), fn chunk, conn ->
+      case Conn.chunk(conn, chunk) do
+        {:ok, conn} ->
+          {:cont, conn}
+
+        {:error, :closed} ->
+          {:halt, conn}
+      end
+    end)
   end
 
   @doc """
@@ -139,7 +137,7 @@ defmodule BlockScoutWeb.API.V2.AdvancedFilterController do
 
         case mb_contract_method do
           %ContractMethod{abi: %{"name" => name}, identifier: identifier} ->
-            render(conn, :methods, methods: [%{method_id: ExplorerHelper.add_0x_prefix(identifier), name: name}])
+            render(conn, :methods, methods: [%{method_id: identifier, name: name}])
 
           _ ->
             render(conn, :methods, methods: [])
@@ -175,7 +173,7 @@ defmodule BlockScoutWeb.API.V2.AdvancedFilterController do
     |> Enum.reduce(%{}, fn contract_method, acc ->
       case contract_method do
         %ContractMethod{abi: %{"name" => name}, identifier: identifier} when is_binary(name) ->
-          Map.put(acc, ExplorerHelper.add_0x_prefix(identifier), name)
+          Map.put(acc, identifier, name)
 
         _ ->
           acc
@@ -194,7 +192,7 @@ defmodule BlockScoutWeb.API.V2.AdvancedFilterController do
     |> Enum.reject(&(&1 == "native"))
     |> Enum.uniq()
     |> Enum.take(@tokens_filter_limit)
-    |> Token.get_by_contract_address_hashes(@api_true)
+    |> Token.get_by_contract_address_hashes(@token_options)
     |> Map.new(fn token -> {token.contract_address_hash, token} end)
   end
 

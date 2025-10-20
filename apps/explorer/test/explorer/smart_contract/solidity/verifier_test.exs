@@ -1,8 +1,10 @@
-if Application.compile_env(:explorer, :chain_type) !== :zksync do
-  defmodule Explorer.SmartContract.Solidity.VerifierTest do
-    use ExUnit.Case, async: true
-    use Explorer.DataCase
+defmodule Explorer.SmartContract.Solidity.VerifierTest do
+  use ExUnit.Case, async: true
+  use Explorer.DataCase
 
+  use Utils.CompileTimeEnvHelper, chain_type: [:explorer, :chain_type]
+
+  if @chain_type == :default do
     @moduletag timeout: :infinity
 
     doctest Explorer.SmartContract.Solidity.Verifier
@@ -67,9 +69,11 @@ if Application.compile_env(:explorer, :chain_type) !== :zksync do
     setup do
       configuration = Application.get_env(:explorer, Explorer.SmartContract.RustVerifierInterfaceBehaviour)
       Application.put_env(:explorer, Explorer.SmartContract.RustVerifierInterfaceBehaviour, enabled: false)
+      Application.put_env(:tesla, :adapter, Tesla.Adapter.Mint)
 
       on_exit(fn ->
         Application.put_env(:explorer, Explorer.SmartContract.RustVerifierInterfaceBehaviour, configuration)
+        Application.put_env(:tesla, :adapter, Explorer.Mock.TeslaAdapter)
       end)
     end
 

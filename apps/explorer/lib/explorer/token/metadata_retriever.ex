@@ -5,16 +5,15 @@ defmodule Explorer.Token.MetadataRetriever do
 
   require Logger
 
-  alias Explorer.{MetadataURIValidator, Repo}
+  alias Explorer.{HttpClient, MetadataURIValidator}
   alias Explorer.Chain.{Hash, Token}
   alias Explorer.Helper, as: ExplorerHelper
   alias Explorer.SmartContract.Reader
-  alias HTTPoison.{Error, Response}
 
   @no_uri_error "no uri"
   @vm_execution_error "VM execution error"
   @invalid_base64_data "invalid data:application/json;base64"
-  @default_headers [{"User-Agent", "blockscout-8.1.1"}]
+  @default_headers [{"User-Agent", "blockscout-9.2.0"}]
 
   # https://eips.ethereum.org/EIPS/eip-1155#metadata
   @erc1155_token_id_placeholder "{id}"
@@ -171,8 +170,10 @@ defmodule Explorer.Token.MetadataRetriever do
   It will retry to fetch each function in the Smart Contract according to :token_functions_reader_max_retries
   configured in the application env case one of them raised error.
   """
-  @spec get_functions_of([Token.t()] | Token.t()) :: map() | {:ok, [map()]}
-  def get_functions_of(tokens) when is_list(tokens) do
+  @spec get_functions_of([Token.t()] | Token.t(), Keyword.t()) :: map() | {:ok, [map()]}
+  def get_functions_of(tokens, opts \\ [])
+
+  def get_functions_of(tokens, _opts) when is_list(tokens) do
     requests =
       tokens
       |> Enum.flat_map(fn token ->
@@ -226,23 +227,28 @@ defmodule Explorer.Token.MetadataRetriever do
     {:ok, processed_result}
   end
 
-  def get_functions_of(%Token{contract_address_hash: contract_address_hash, type: type}) do
-    base_metadata =
+  def get_functions_of(%Token{contract_address_hash: contract_address_hash, type: type}, opts) do
+    set_skip_metadata = Keyword.get(opts, :set_skip_metadata, false)
+
+    raw_metadata =
       contract_address_hash
       |> fetch_functions_from_contract(@contract_functions)
+
+    base_metadata =
+      raw_metadata
       |> format_contract_functions_result(contract_address_hash)
 
     metadata = try_to_fetch_erc_1155_name(base_metadata, contract_address_hash, type)
 
-    if metadata == %{} do
-      token_to_update =
-        Token
-        |> Repo.get_by(contract_address_hash: contract_address_hash)
-
-      set_skip_metadata(token_to_update)
+    if Enum.empty?(metadata) && set_skip_metadata do
+      Map.put(
+        metadata,
+        :skip_metadata,
+        Enum.all?(raw_metadata, fn {_key, value} -> EthereumJSONRPC.contract_failure?(value) end)
+      )
+    else
+      metadata
     end
-
-    metadata
   end
 
   defp try_to_fetch_erc_1155_name(base_metadata, contract_address_hash, token_type) do
@@ -306,10 +312,6 @@ defmodule Explorer.Token.MetadataRetriever do
 
   def parse_fetch_json_response(other) do
     other
-  end
-
-  defp set_skip_metadata(token_to_update) do
-    Token.update(token_to_update, %{skip_metadata: true})
   end
 
   def get_total_supply_of(contract_address_hash) when is_binary(contract_address_hash) do
@@ -848,12 +850,12 @@ defmodule Explorer.Token.MetadataRetriever do
   defp fetch_metadata_from_uri_request(uri, hex_token_id, ipfs_params) do
     headers = if ipfs?(ipfs_params), do: ipfs_headers(), else: @default_headers
 
-    case Application.get_env(:explorer, :http_adapter).get(uri, headers,
+    case HttpClient.get(uri, headers,
            recv_timeout: 30_000,
            follow_redirect: true,
-           hackney: [pool: :token_instance_fetcher]
+           pool: :token_instance_fetcher
          ) do
-      {:ok, %Response{body: body, status_code: 200, headers: response_headers}} ->
+      {:ok, %{body: body, status_code: 200, headers: response_headers}} ->
         content_type = get_content_type_from_headers(response_headers)
 
         case check_content_type(content_type, uri, hex_token_id, body, ipfs_params) do
@@ -864,7 +866,7 @@ defmodule Explorer.Token.MetadataRetriever do
             {:error, reason}
         end
 
-      {:ok, %Response{body: body, status_code: code}} ->
+      {:ok, %{body: body, status_code: code}} ->
         Logger.debug(
           ["Request to token uri: #{inspect(uri)} failed with code #{code}. Body:", inspect(body)],
           fetcher: :token_instances
@@ -872,7 +874,7 @@ defmodule Explorer.Token.MetadataRetriever do
 
         {:error_code, code}
 
-      {:error, %Error{reason: reason}} ->
+      {:error, reason} ->
         Logger.warning(
           ["Request to token uri failed: #{inspect(uri)}.", inspect(reason)],
           fetcher: :token_instances
