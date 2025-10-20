@@ -1,5 +1,5 @@
 defmodule BlockScoutWeb.API.V2.StatsController do
-  use Phoenix.Controller
+  use Phoenix.Controller, namespace: BlockScoutWeb
   use Utils.CompileTimeEnvHelper, chain_type: [:explorer, :chain_type]
 
   alias BlockScoutWeb.API.V2.Helper
@@ -107,8 +107,7 @@ defmodule BlockScoutWeb.API.V2.StatsController do
     transaction_history_data =
       date_range
       |> Enum.map(fn row ->
-        # todo: `transaction_count` property should be removed in favour `transactions_count` property with the next release after 8.0.0
-        %{date: row.date, transaction_count: row.number_of_transactions, transactions_count: row.number_of_transactions}
+        %{date: row.date, transactions_count: row.number_of_transactions}
       end)
 
     json(conn, %{
@@ -197,8 +196,8 @@ defmodule BlockScoutWeb.API.V2.StatsController do
 
     :celo ->
       defp add_chain_type_fields(response) do
-        import Explorer.Chain.Celo.Reader, only: [last_block_epoch_number: 0]
-        response |> Map.put("celo", %{"epoch_number" => last_block_epoch_number()})
+        alias Explorer.Chain.Cache.CeloEpochs
+        response |> Map.put("celo", %{"epoch_number" => CeloEpochs.last_block_epoch_number()})
       end
 
     _ ->

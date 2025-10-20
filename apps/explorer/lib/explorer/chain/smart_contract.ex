@@ -8,6 +8,7 @@ defmodule Explorer.Chain.SmartContract.Schema do
 
   alias Explorer.Chain.{
     Address,
+    Address.Reputation,
     Hash,
     SmartContractAdditionalSource
   }
@@ -77,6 +78,8 @@ defmodule Explorer.Chain.SmartContract.Schema do
           references: :address_hash,
           foreign_key: :address_hash
         )
+
+        has_one(:reputation, Reputation, foreign_key: :address_hash, references: :address_hash)
 
         timestamps()
 
@@ -189,23 +192,30 @@ defmodule Explorer.Chain.SmartContract do
     }
   ]
 
-  @default_languages ~w(solidity vyper yul)a
+  @default_languages [
+    solidity: 1,
+    vyper: 2,
+    yul: 3,
+    geas: 5
+  ]
+
   @chain_type_languages (case @chain_type do
                            :arbitrum ->
-                             ~w(stylus_rust)a
+                             [stylus_rust: 4]
 
                            :zilliqa ->
-                             ~w(scilla)a
+                             [scilla: 4]
 
                            _ ->
-                             ~w()a
+                             []
                          end)
 
-  @languages @default_languages ++ @chain_type_languages
-  @languages_enum @languages |> Enum.with_index(1)
-  @language_string_to_atom @languages |> Map.new(&{to_string(&1), &1})
+  @languages_enum @default_languages ++ @chain_type_languages
+  @language_string_to_atom @languages_enum
+                           |> Enum.map(&elem(&1, 0))
+                           |> Map.new(&{to_string(&1), &1})
 
-  @type base_language :: :solidity | :vyper | :yul
+  @type base_language :: :solidity | :vyper | :yul | :geas
 
   case @chain_type do
     :arbitrum ->
@@ -241,8 +251,6 @@ defmodule Explorer.Chain.SmartContract do
   def dead_address_hash_string do
     @dead_address_hash_string
   end
-
-  @default_sorting [asc: :hash]
 
   @typedoc """
   The name of a parameter to a function or event.
@@ -956,14 +964,11 @@ defmodule Explorer.Chain.SmartContract do
       |> __MODULE__.changeset(attrs)
       |> Changeset.put_change(:external_libraries, external_libraries)
 
-    # Prepares changesets for additional sources associated with the contract
-    new_contract_additional_source = %SmartContractAdditionalSource{}
-
     smart_contract_additional_sources_changesets =
       if secondary_sources do
         secondary_sources
         |> Enum.map(fn changeset ->
-          new_contract_additional_source
+          %SmartContractAdditionalSource{}
           |> SmartContractAdditionalSource.changeset(changeset)
         end)
       else
@@ -1035,50 +1040,62 @@ defmodule Explorer.Chain.SmartContract do
   def update_smart_contract(attrs \\ %{}, external_libraries \\ [], secondary_sources \\ []) do
     address_hash = Map.get(attrs, :address_hash)
 
-    # Removes all additional sources associated with the contract
-    query_sources =
-      from(
-        source in SmartContractAdditionalSource,
-        where: source.address_hash == ^address_hash
-      )
-
-    _delete_sources = Repo.delete_all(query_sources)
-
-    # Retrieve the existing smart contract
-    smart_contract = address_hash_to_smart_contract(address_hash)
-
-    # Updates existing changeset and extends it with external libraries.
-    # As part of changeset preparation and verification, contract methods are
-    # updated as so if new ABI does not contain some of previous methods, they
-    # are still kept in the database
-    smart_contract_changeset =
-      smart_contract
-      |> __MODULE__.changeset(attrs)
-      |> Changeset.put_change(:external_libraries, external_libraries)
-
-    # Prepares changesets for additional sources associated with the contract
-    new_contract_additional_source = %SmartContractAdditionalSource{}
-
-    smart_contract_additional_sources_changesets =
-      if secondary_sources do
-        secondary_sources
-        |> Enum.map(fn changeset ->
-          new_contract_additional_source
-          |> SmartContractAdditionalSource.changeset(changeset)
-        end)
-      else
-        []
-      end
-
     # Prepares the queries to clear the primary flag for the contract address in
     # Explorer.Chain.Address.Name if any (enforce ShareLocks tables order (see
     # docs: sharelocks.md)) and updated the contract details.
     insert_contract_query =
       Multi.new()
+      |> Multi.run(:acquire_smart_contract, fn repo, _ ->
+        # Get smart contract with lock INSIDE the transaction
+        smart_contract =
+          address_hash
+          |> get_by_address_hash_query()
+          |> lock("FOR UPDATE")
+          |> repo.one()
+
+        {:ok, smart_contract}
+      end)
+      |> Multi.run(:delete_sources, fn repo, _ ->
+        {count, _} =
+          repo.delete_all(
+            from(
+              source in SmartContractAdditionalSource,
+              where: source.address_hash == ^address_hash
+            )
+          )
+
+        {:ok, count}
+      end)
       |> Multi.run(:clear_primary_address_names, fn repo, _ ->
         AddressName.clear_primary_address_names(repo, address_hash)
       end)
-      |> Multi.update(:smart_contract, smart_contract_changeset)
+      |> Multi.run(
+        :smart_contract,
+        fn repo, %{acquire_smart_contract: smart_contract} ->
+          smart_contract
+          |> __MODULE__.changeset(attrs)
+          |> Changeset.put_change(:external_libraries, external_libraries)
+          |> repo.update()
+        end
+      )
+      |> Multi.run(
+        :set_primary_address_name,
+        fn repo, %{smart_contract: %SmartContract{name: name}} ->
+          result = AddressName.create_primary_address_name(repo, name, address_hash)
+          {:ok, result}
+        end
+      )
+
+    smart_contract_additional_sources_changesets =
+      if secondary_sources do
+        secondary_sources
+        |> Enum.map(fn changeset ->
+          %SmartContractAdditionalSource{}
+          |> SmartContractAdditionalSource.changeset(changeset)
+        end)
+      else
+        []
+      end
 
     # Updates the queries from the previous step with inserting additional sources
     # of the contract
@@ -1093,9 +1110,6 @@ defmodule Explorer.Chain.SmartContract do
     insert_result =
       insert_contract_query_with_additional_sources
       |> Repo.transaction()
-
-    # Set the primary mark for the contract name
-    AddressName.create_primary_address_name(Repo, Changeset.get_field(smart_contract_changeset, :name), address_hash)
 
     case insert_result do
       {:ok, %{smart_contract: smart_contract}} ->
@@ -1119,7 +1133,8 @@ defmodule Explorer.Chain.SmartContract do
   @doc """
   Converts address hash to smart-contract object with metadata_from_verified_bytecode_twin=true
   """
-  @spec address_hash_to_smart_contract_with_bytecode_twin(Hash.Address.t(), [api?]) :: {__MODULE__.t() | nil, boolean()}
+  @spec address_hash_to_smart_contract_with_bytecode_twin(Hash.Address.t(), [api?], boolean()) ::
+          {__MODULE__.t() | nil, boolean()}
   def address_hash_to_smart_contract_with_bytecode_twin(address_hash, options \\ [], fetch_implementation? \\ true) do
     current_smart_contract = address_hash_to_smart_contract(address_hash, options)
 
@@ -1139,7 +1154,7 @@ defmodule Explorer.Chain.SmartContract do
                 implementation_address_fetched?: false,
                 refetch_necessity_checked?: false
               },
-              Keyword.put(options, :proxy_without_abi?, true)
+              options
             )
 
           {implementation_smart_contract, true}
@@ -1436,10 +1451,27 @@ defmodule Explorer.Chain.SmartContract do
   def verified_contract_addresses(options \\ []) do
     necessity_by_association = Keyword.get(options, :necessity_by_association, %{})
     paging_options = Keyword.get(options, :paging_options, Chain.default_paging_options())
-    sorting_options = Keyword.get(options, :sorting, [])
 
+    # If no sorting options are provided, we sort by `:id` descending only. If
+    # there are some sorting options supplied, we sort by `:hash` ascending as a
+    # secondary key.
+    {sorting_options, default_sorting_options, use_legacy_query?} =
+      options
+      |> Keyword.get(:sorting)
+      |> case do
+        nil ->
+          {[], [{:desc, :id, :smart_contract}], true}
+
+        options ->
+          {options, [asc: :hash], false}
+      end
+
+    # We don't use alias so the mock of background_migrations_finished?/0 in
+    # tests is working properly
+    #
+    # credo:disable-for-lines:2 Credo.Check.Design.AliasUsage
     addresses_query =
-      if background_migrations_finished?() do
+      if Explorer.Chain.SmartContract.background_migrations_finished?() and not use_legacy_query? do
         verified_addresses_query(options)
       else
         # Legacy query approach - will be removed in future releases
@@ -1447,9 +1479,9 @@ defmodule Explorer.Chain.SmartContract do
       end
 
     addresses_query
-    |> ExplorerHelper.maybe_hide_scam_addresses(:hash, options)
-    |> SortingHelper.apply_sorting(sorting_options, @default_sorting)
-    |> SortingHelper.page_with_sorting(paging_options, sorting_options, @default_sorting)
+    |> ExplorerHelper.maybe_hide_scam_addresses_with_select(:hash, options)
+    |> SortingHelper.apply_sorting(sorting_options, default_sorting_options)
+    |> SortingHelper.page_with_sorting(paging_options, sorting_options, default_sorting_options)
     |> Chain.join_associations(necessity_by_association)
     |> Chain.select_repo(options).all()
   end
@@ -1493,6 +1525,7 @@ defmodule Explorer.Chain.SmartContract do
       as: :address,
       where: address.verified == true,
       inner_lateral_join: contract in ^smart_contracts_subquery,
+      as: :smart_contract,
       on: true,
       select: address,
       preload: [smart_contract: contract]

@@ -9,6 +9,7 @@ defmodule Indexer.Fetcher.Token do
   alias Explorer.Chain
   alias Explorer.Chain.Hash.Address
   alias Explorer.Chain.Token
+  alias Explorer.MicroserviceInterfaces.MultichainSearch
   alias Explorer.Token.MetadataRetriever
   alias Indexer.{BufferedTask, Tracer}
 
@@ -66,13 +67,22 @@ defmodule Indexer.Fetcher.Token do
   end
 
   defp catalog_token(token) do
-    token_params =
-      token
-      |> MetadataRetriever.get_functions_of()
-      |> (&if(&1 == %{}, do: &1, else: Map.put(&1, :cataloged, true))).()
+    token
+    |> MetadataRetriever.get_functions_of(set_skip_metadata: true)
+    |> case do
+      %{skip_metadata: false} ->
+        :ok
 
-    {:ok, _} = Token.update(token, token_params)
-    :ok
+      token_params ->
+        data_for_multichain = MultichainSearch.prepare_token_metadata_for_queue(token, token_params)
+
+        %{}
+        |> Map.put(token.contract_address_hash.bytes, data_for_multichain)
+        |> MultichainSearch.send_token_info_to_queue(:metadata)
+
+        {:ok, _} = Token.update(token, Map.put(token_params, :cataloged, true))
+        :ok
+    end
   end
 
   defp defaults do

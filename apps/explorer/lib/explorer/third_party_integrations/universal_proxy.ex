@@ -1,10 +1,9 @@
 defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
   @moduledoc """
-  Module for universal proxying 3rd party API endpoints
+  A single point of entry for proxying third-party HTTP API endpoints
   """
-  use Tesla
-
-  alias Explorer.Helper
+  require Logger
+  alias Explorer.{Helper, HttpClient}
 
   @recv_timeout 60_000
 
@@ -13,6 +12,7 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
           body: String.t(),
           headers: [{String.t(), String.t()}],
           method: atom() | nil,
+          protocol: atom() | nil,
           platform_config: map() | nil,
           platform_id: String.t() | nil
         }
@@ -29,7 +29,9 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
         }
 
   @allowed_methods [:get, :post, :put, :patch, :delete]
+  @allowed_protocols [:http, :https, :ws, :wss]
   @reserved_param_types ~w(address chain_id chain_id_dependent)
+  @unexpected_error "Unexpected error when calling proxied endpoint"
 
   @cache_name :universal_proxy_config
 
@@ -54,7 +56,7 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
   1. Retrieves the platform-specific configuration based on the `platform_id` key in `proxy_params`.
   2. Constructs the request URL using the `base_url` and `base` endpoint path.
   3. Parses and applies any API key and endpoint parameters.
-  4. Sends the HTTP request using the Tesla library with the specified method, URL, headers, and body.
+  4. Sends the HTTP request using `Explorer.HttpClient` with the specified method, URL, headers, and body.
 
   ## Returns
 
@@ -74,52 +76,59 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
 
   ## Notes
 
-    - The function uses the `Tesla` library with the `Tesla.Adapter.Mint` adapter.
+    - The function uses the `Explorer.HttpClient` with pre-configured adapter.
     - A timeout is applied to the request using the `@recv_timeout` module attribute.
   """
-  @spec api_request(map()) :: {any(), integer()}
+  @spec api_request(map()) ::
+          {any(), integer()} | {:ok, pid()} | :ignore | {:error, {:already_started, pid()} | (reason :: term())}
   def api_request(proxy_params) do
-    %{
-      url: url,
-      body: body,
-      headers: headers,
-      method: method,
-      platform_config: platform_config,
-      platform_id: platform_id
-    } = parse_proxy_params(proxy_params)
+    proxy_params
+    |> parse_proxy_params()
+    |> api_request_inner()
+  end
 
-    error_message =
-      cond do
-        !platform_config ->
-          "Platform '#{platform_id}' not found in config or 'platforms' property doesn't exist at all"
-
-        is_nil(url) ->
-          "'base_url' is not defined for platform_id '#{platform_id}' or 'base' endpoint is not defined or 'base' endpoint path is not defined"
-
-        is_nil(method) ->
-          "Invalid HTTP request method for platform '#{platform_id}'"
-
-        true ->
-          "Unexpected error"
-      end
-
-    with {:invalid_config, false} <- {:invalid_config, is_nil(url)},
-         {:invalid_config, false} <- {:invalid_config, is_nil(method)},
-         {:ok, %Tesla.Env{status: status, body: body}} <-
-           Tesla.request(
-             method: method,
-             url: url,
-             headers: headers,
-             body: body,
-             opts: [timeout: @recv_timeout, adapter: [protocols: [:http1]]]
-           ) do
+  defp api_request_inner(%{
+         url: url,
+         body: body,
+         headers: headers,
+         method: method,
+         protocol: protocol
+       })
+       when protocol in [:http, :https] and not is_nil(url) and not is_nil(method) do
+    with {:invalid_config, false} <- {:invalid_config, is_nil(method)},
+         {:ok, %{status_code: status, body: body}} <-
+           HttpClient.request(method, url, headers, body, recv_timeout: @recv_timeout) do
       {Helper.decode_json(body), status}
     else
-      {:invalid_config, true} ->
-        {"Invalid config: #{error_message}", 422}
+      err ->
+        Logger.error(fn -> ["#{@unexpected_error}: ", inspect(err)] end)
+        {@unexpected_error, 500}
+    end
+  end
 
-      _ ->
-        {"Unexpected error when calling proxied endpoint", 500}
+  defp api_request_inner(%{
+         url: url,
+         method: method,
+         platform_config: platform_config,
+         platform_id: platform_id
+       }) do
+    error_message = construct_error_message(platform_config, platform_id, url, method)
+    {"Invalid config: #{error_message}", 422}
+  end
+
+  defp construct_error_message(platform_config, platform_id, url, method) do
+    cond do
+      !platform_config ->
+        "Platform '#{platform_id}' not found in config or 'platforms' property doesn't exist at all"
+
+      is_nil(url) ->
+        "'base_url' is not defined for platform_id '#{platform_id}' or 'base' endpoint is not defined or 'base' endpoint path is not defined"
+
+      is_nil(method) ->
+        "Invalid HTTP request method for platform '#{platform_id}'"
+
+      true ->
+        "Unexpected error"
     end
   end
 
@@ -163,6 +172,7 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
     endpoint_api_key = platform_config && platform_config["api_key"]
 
     method = parse_method(platform_config)
+    protocol = parse_protocol(platform_config)
 
     raw_url =
       with true <- not is_nil(platform_config),
@@ -183,6 +193,7 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
       body: "",
       headers: [],
       method: method,
+      protocol: protocol,
       platform_config: platform_config,
       platform_id: platform_id
     }
@@ -194,20 +205,31 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
   defp parse_method(nil), do: nil
 
   # sobelow_skip ["DOS.StringToAtom"]
-  defp parse_method(platform_config) do
+  defp parse_method(%{
+         "endpoints" => %{
+           "base" => %{"method" => method}
+         }
+       }) do
     raw_method =
-      platform_config["endpoints"]["base"]["method"]
+      method
       # limit size of the input to prevent memory leak
       |> String.slice(0..10)
       |> String.downcase()
       |> String.to_atom()
 
-    if raw_method in @allowed_methods do
-      raw_method
-    else
-      nil
-    end
+    if raw_method in @allowed_methods, do: raw_method, else: nil
   end
+
+  defp parse_method(_platform_config), do: nil
+
+  # sobelow_skip ["DOS.StringToAtom"]
+  defp parse_protocol(%{"base_url" => base_url}) do
+    protocol = base_url |> URI.parse() |> Map.get(:scheme) |> String.to_atom()
+
+    if protocol in @allowed_protocols, do: protocol, else: nil
+  end
+
+  defp parse_protocol(_platform_config), do: nil
 
   @spec parse_endpoint_api_key(api_request_params(), api_key() | nil, String.t() | nil) :: api_request_params()
   defp parse_endpoint_api_key(%{url: _url, headers: _headers} = map, nil, _platform_id), do: map
@@ -221,6 +243,13 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
     endpoint_api_key_value = System.get_env(api_key_env_name)
 
     case location do
+      "path" ->
+        if endpoint_api_key_value do
+          Map.put(map, :url, String.replace(url, ":#{param_name}", endpoint_api_key_value))
+        else
+          map
+        end
+
       "header" ->
         if endpoint_api_key["prefix"] do
           Map.put(map, :headers, [
@@ -333,8 +362,8 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
         safe_parse_config_string(config_string)
 
       nil ->
-        case Tesla.get(config_url()) do
-          {:ok, %Tesla.Env{status: 200, body: config_string}} ->
+        case HttpClient.get(config_url()) do
+          {:ok, %{status_code: 200, body: config_string}} ->
             safe_parse_config_string(config_string, true)
 
           _ ->
@@ -356,5 +385,55 @@ defmodule Explorer.ThirdPartyIntegrations.UniversalProxy do
 
   defp config_url do
     Application.get_env(:explorer, __MODULE__)[:config_url]
+  end
+
+  @doc """
+  Retrieves a list of all WebSocket proxies that have been configured for use within the application.
+
+  Returns:
+    - A list of tuples {platform_id, url}.
+
+  ## Examples
+
+      iex> Explorer.ThirdPartyIntegrations.UniversalProxy.websocket_proxies()
+      [
+        {"ws_1", "wss://proxy1.example.com"},
+        {"ws_2", "wss://proxy2.example.com"}
+      ]
+  """
+  @spec websocket_proxies() :: [{String.t(), String.t()}]
+  def websocket_proxies do
+    if Mix.env() == :test do
+      []
+    else
+      config = config()
+
+      if is_nil(config["platforms"]) do
+        []
+      else
+        config["platforms"]
+        |> Map.keys()
+        |> Enum.reduce([], fn platform_id, acc ->
+          proxy_params = parse_proxy_params(%{"platform_id" => platform_id})
+
+          # credo:disable-for-next-line Credo.Check.Refactor.Nesting
+          if valid_websocket_url?(proxy_params.url) do
+            [{platform_id, proxy_params.url} | acc]
+          else
+            acc
+          end
+        end)
+        |> Enum.reverse()
+      end
+    end
+  end
+
+  defp valid_websocket_url?(nil), do: false
+
+  defp valid_websocket_url?(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host} when scheme in ["ws", "wss"] and not is_nil(host) -> true
+      _ -> false
+    end
   end
 end

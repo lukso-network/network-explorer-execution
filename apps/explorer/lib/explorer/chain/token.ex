@@ -2,7 +2,7 @@ defmodule Explorer.Chain.Token.Schema do
   @moduledoc false
   use Utils.CompileTimeEnvHelper, bridged_tokens_enabled: [:explorer, [Explorer.Chain.BridgedToken, :enabled]]
 
-  alias Explorer.Chain.{Address, Hash}
+  alias Explorer.Chain.{Address, Address.Reputation, Hash}
 
   if @bridged_tokens_enabled do
     @bridged_field [
@@ -33,6 +33,7 @@ defmodule Explorer.Chain.Token.Schema do
         field(:icon_url, :string)
         field(:is_verified_via_admin_panel, :boolean)
         field(:volume_24h, :decimal)
+        field(:transfer_count, :integer)
 
         belongs_to(
           :contract_address,
@@ -43,6 +44,8 @@ defmodule Explorer.Chain.Token.Schema do
           type: Hash.Address,
           null: false
         )
+
+        has_one(:reputation, Reputation, foreign_key: :address_hash, references: :contract_address_hash)
 
         unquote_splicing(@bridged_field)
 
@@ -129,6 +132,7 @@ defmodule Explorer.Chain.Token do
   * `contract_address_hash` - Address hash foreign key
   * `holder_count` - the number of `t:Explorer.Chain.Address.t/0` (except the burn address) that have a
     `t:Explorer.Chain.CurrentTokenBalance.t/0` `value > 0`.  Can be `nil` when data not migrated.
+  * `transfer_count` - the number of token transfers for `t:Explorer.Chain.Address.t/0` token
   * `fiat_value` - The price of a token in a configured currency (USD by default).
   * `circulating_market_cap` - The circulating market cap of a token in a configured currency (USD by default).
   * `icon_url` - URL of the token's icon.
@@ -138,6 +142,17 @@ defmodule Explorer.Chain.Token do
 
   @required_attrs ~w(contract_address_hash type)a
   @optional_attrs ~w(cataloged decimals name symbol total_supply skip_metadata total_supply_updated_at_block metadata_updated_at updated_at fiat_value circulating_market_cap icon_url is_verified_via_admin_panel volume_24h)a
+
+  @doc """
+    Returns the **ordered** list of allowed NFT type labels.
+  """
+  @spec allowed_nft_type_labels() :: [String.t()]
+  def allowed_nft_type_labels,
+    do: [
+      "ERC-721",
+      "ERC-1155",
+      "ERC-404"
+    ]
 
   @doc false
   def changeset(%Token{} = token, params \\ %{}) do
@@ -169,7 +184,7 @@ defmodule Explorer.Chain.Token do
         changeset
 
       property ->
-        put_change(changeset, key, Helper.sanitize_input(property))
+        put_change(changeset, key, Helper.escape_minimal(property))
     end
   end
 
@@ -350,7 +365,7 @@ defmodule Explorer.Chain.Token do
     sorted_paginated_query =
       Token
       |> Chain.join_associations(necessity_by_association)
-      |> ExplorerHelper.maybe_hide_scam_addresses(:contract_address_hash, options)
+      |> ExplorerHelper.maybe_hide_scam_addresses_with_select(:contract_address_hash, options)
       |> apply_filter(token_type)
       |> SortingHelper.apply_sorting(sorting, @default_sorting)
       |> SortingHelper.page_with_sorting(paging_options, sorting, @default_sorting)
@@ -376,15 +391,26 @@ defmodule Explorer.Chain.Token do
   end
 
   def get_by_contract_address_hash(hash, options) do
-    Chain.select_repo(options).get_by(__MODULE__, contract_address_hash: hash)
+    necessity_by_association = Keyword.get(options, :necessity_by_association, %{})
+
+    __MODULE__
+    |> where([t], t.contract_address_hash == ^hash)
+    |> Chain.join_associations(necessity_by_association)
+    |> Chain.select_repo(options).one()
   end
 
   @doc """
     Gets tokens with given contract address hashes.
   """
-  @spec get_by_contract_address_hashes([Hash.Address.t()], [Chain.api?()]) :: [Token.t()]
+  @spec get_by_contract_address_hashes([Hash.Address.t()], [Chain.api?() | Chain.necessity_by_association_option()]) ::
+          [Token.t()]
   def get_by_contract_address_hashes(hashes, options) do
-    Chain.select_repo(options).all(from(t in __MODULE__, where: t.contract_address_hash in ^hashes))
+    necessity_by_association = Keyword.get(options, :necessity_by_association, %{})
+
+    __MODULE__
+    |> where([t], t.contract_address_hash in ^hashes)
+    |> Chain.join_associations(necessity_by_association)
+    |> Chain.select_repo(options).all()
   end
 
   @doc """
@@ -407,13 +433,38 @@ defmodule Explorer.Chain.Token do
     It used by Explorer.Chain.Cache.Counters.TokenHoldersCount module.
   """
   @spec update_token_holder_count(Hash.Address.t(), integer()) :: {non_neg_integer(), nil}
-  def update_token_holder_count(contract_address_hash, holder_count) when not is_nil(holder_count) do
+  def update_token_holder_count(contract_address_hash, holders_count) when not is_nil(holders_count) do
     now = DateTime.utc_now()
 
     Repo.update_all(
       from(t in __MODULE__,
         where: t.contract_address_hash == ^contract_address_hash,
-        update: [set: [holder_count: ^holder_count, updated_at: ^now]]
+        update: [set: [holder_count: ^holders_count, updated_at: ^now]]
+      ),
+      [],
+      timeout: @timeout
+    )
+  end
+
+  @doc """
+    Updates `transfer_count` field for a given `contract_address_hash`.
+    Used by the `Explorer.Chain.Cache.Counters.TokenTransfersCount` module.
+
+    ## Parameters
+    - `contract_address_hash`: The address of the token contract.
+    - `transfer_count`: The updated counter value.
+
+    ## Returns
+    - `{updated_count, nil}` tuple where `updated_count` is the number of updated rows in the db table.
+  """
+  @spec update_token_transfer_count(Hash.Address.t(), non_neg_integer()) :: {non_neg_integer(), nil}
+  def update_token_transfer_count(contract_address_hash, transfer_count) when not is_nil(transfer_count) do
+    now = DateTime.utc_now()
+
+    Repo.update_all(
+      from(t in __MODULE__,
+        where: t.contract_address_hash == ^contract_address_hash,
+        update: [set: [transfer_count: ^transfer_count, updated_at: ^now]]
       ),
       [],
       timeout: @timeout
