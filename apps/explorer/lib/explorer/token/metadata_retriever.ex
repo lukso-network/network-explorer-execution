@@ -159,16 +159,16 @@ defmodule Explorer.Token.MetadataRetriever do
 
   # 54f6127f = keccak256(getData(bytes32))
   @get_data_signature "54f6127f"
-  
+
   # LSP4TokenName: keccak256('LSP4TokenName')
   @lsp4_token_name_key "0xdeba1e292f8ba88238e10ab3c7f88bd4be4fac56cad5194b6ecceaf653468af1"
   # LSP4TokenSymbol: keccak256('LSP4TokenSymbol')
   @lsp4_token_symbol_key "0x2f0a68ab07768e01943a599e73362a0e17a63a72e94dd2e384d2c1d4db932756"
-  
+
   @lsp_get_data_name_function %{
     @get_data_signature => [@lsp4_token_name_key]
   }
-  
+
   @lsp_get_data_symbol_function %{
     @get_data_signature => [@lsp4_token_symbol_key]
   }
@@ -259,7 +259,7 @@ defmodule Explorer.Token.MetadataRetriever do
         end)
         |> Enum.reverse()
       end
-    
+
     final_result =
       processed_result
       |> Enum.map(fn token ->
@@ -284,10 +284,10 @@ defmodule Explorer.Token.MetadataRetriever do
       raw_metadata
       |> format_contract_functions_result(contract_address_hash)
 
-    metadata = try_to_fetch_erc_1155_name(base_metadata, contract_address_hash, type)
+    erc_metadata = try_to_fetch_erc_1155_name(base_metadata, contract_address_hash, type)
 
     # Try LSP7/8 fetching if we don't have name or symbol
-    metadata = try_to_fetch_lsp_metadata(metadata, contract_address_hash)
+    metadata = try_to_fetch_lsp_metadata(erc_metadata, contract_address_hash)
 
     if Enum.empty?(metadata) && set_skip_metadata do
       Map.put(
@@ -331,27 +331,27 @@ defmodule Explorer.Token.MetadataRetriever do
   end
 
   defp try_to_fetch_lsp_metadata(base_metadata, contract_address_hash) do
-    if (!Map.has_key?(base_metadata, :name) || !Map.has_key?(base_metadata, :symbol)) do
+    if !Map.has_key?(base_metadata, :name) || !Map.has_key?(base_metadata, :symbol) do
       lsp_metadata = %{}
 
       lsp_metadata =
-        if !Map.has_key?(base_metadata, :name) do
+        if Map.has_key?(base_metadata, :name) do
+          lsp_metadata
+        else
           raw_result = fetch_functions_from_contract(contract_address_hash, @lsp_get_data_name_function)
           name_result = format_lsp_data_result(raw_result, :name)
 
           Map.merge(lsp_metadata, name_result)
-        else
-          lsp_metadata
         end
 
       lsp_metadata =
-        if !Map.has_key?(base_metadata, :symbol) do
+        if Map.has_key?(base_metadata, :symbol) do
+          lsp_metadata
+        else
           raw_result = fetch_functions_from_contract(contract_address_hash, @lsp_get_data_symbol_function)
           symbol_result = format_lsp_data_result(raw_result, :symbol)
 
           Map.merge(lsp_metadata, symbol_result)
-        else
-          lsp_metadata
         end
 
       Map.merge(base_metadata, lsp_metadata)
@@ -409,7 +409,8 @@ defmodule Explorer.Token.MetadataRetriever do
 
   defp fetch_functions_with_retries(contract_address_hash, contract_functions, accumulator, retries_left)
        when retries_left > 0 do
-    contract_functions_result = Reader.query_contract(contract_address_hash, nil, @contract_abi, contract_functions, false)
+    contract_functions_result =
+      Reader.query_contract(contract_address_hash, nil, @contract_abi, contract_functions, false)
 
     functions_with_errors =
       Enum.filter(contract_functions_result, fn function ->
@@ -571,16 +572,20 @@ defmodule Explorer.Token.MetadataRetriever do
     case contract_result do
       %{@get_data_signature => {:ok, [bytes_data]}} when is_binary(bytes_data) ->
         decoded = decode_lsp_bytes(bytes_data)
+
         if decoded && String.valid?(decoded) && String.trim(decoded) != "" do
           truncated = String.slice(String.trim(decoded), 0, 10_000)
           %{field_name => truncated}
         else
           %{}
         end
+
       %{@get_data_signature => {:ok, result}} ->
         %{}
+
       %{@get_data_signature => error} ->
         %{}
+
       _ ->
         %{}
     end
@@ -603,48 +608,50 @@ defmodule Explorer.Token.MetadataRetriever do
   end
 
   defp decode_lsp_bytes_from_hex(hex_data) do
-    try do
-      case Base.decode16(hex_data, case: :mixed) do
-        {:ok, raw_bytes} ->
-          decode_lsp_bytes_from_raw(raw_bytes)
-        :error ->
-          decode_lsp_bytes_from_raw(hex_data)
-      end
+    case Base.decode16(hex_data, case: :mixed) do
+      {:ok, raw_bytes} ->
+        decode_lsp_bytes_from_raw(raw_bytes)
+
+      :error ->
+        decode_lsp_bytes_from_raw(hex_data)
+
+    end
     rescue
       e ->
         nil
-    end
   end
 
   defp decode_lsp_bytes_from_raw(raw_bytes) do
-    try do
-      case decode_verifiable_uri(raw_bytes) do
-        {:ok, uri} when is_binary(uri) and uri != "" ->
-          uri
+    case decode_verifiable_uri(raw_bytes) do
+      {:ok, uri} when is_binary(uri) and uri != "" ->
+        uri
 
-        _ ->
-          case TypeDecoder.decode_raw(raw_bytes, [:string]) do
-            [decoded_string] when is_binary(decoded_string) ->
-              decoded_string
+      _ ->
+        decode_raw_bytes_with_type_decoder(raw_bytes)
+    end
+  rescue
+    MatchError ->
+      validate_and_trim_raw_bytes(raw_bytes)
 
-            result ->
-              if String.valid?(raw_bytes) do
-                String.trim(raw_bytes)
-              else
-                nil
-              end
-          end
-      end
-    rescue
-      MatchError ->
-        if String.valid?(raw_bytes) do
-          String.trim(raw_bytes)
-        else
-          nil
-        end
+    e ->
+      nil
+  end
 
-      e ->
-        nil
+  defp decode_raw_bytes_with_type_decoder(raw_bytes) do
+    case TypeDecoder.decode_raw(raw_bytes, [:string]) do
+      [decoded_string] when is_binary(decoded_string) ->
+        decoded_string
+
+      result ->
+        validate_and_trim_raw_bytes(raw_bytes)
+    end
+  end
+
+  defp validate_and_trim_raw_bytes(raw_bytes) do
+    if String.valid?(raw_bytes) do
+      String.trim(raw_bytes)
+    else
+      nil
     end
   end
 
@@ -724,11 +731,12 @@ defmodule Explorer.Token.MetadataRetriever do
         base_uri = String.trim(base_uri)
 
         # Add token_id to the base URI
-        full_uri = if String.ends_with?(base_uri, "/") do
-          base_uri <> to_string(token_id)
-        else
-          base_uri <> "/" <> to_string(token_id)
-        end
+        full_uri =
+          if String.ends_with?(base_uri, "/") do
+            base_uri <> to_string(token_id)
+          else
+            base_uri <> "/" <> to_string(token_id)
+          end
 
         {:ok, [full_uri]}
 
@@ -902,7 +910,7 @@ defmodule Explorer.Token.MetadataRetriever do
 
     if error =~ "execution reverted" or error =~ @vm_execution_error do
       {:error, @vm_execution_error}
-    else      
+    else
       Logger.warning(["Unknown metadata format error #{inspect(error)}."], fetcher: :token_instances)
 
       # truncate error since it will be stored in DB
@@ -1058,21 +1066,19 @@ defmodule Explorer.Token.MetadataRetriever do
   defp extract_lsp4_animation_url(%{"assets" => assets}) when is_list(assets) and length(assets) > 0 do
     # assets can contain videos or 3D models
     # Find first video or animation asset
-    case Enum.find(assets, fn asset ->
-           case asset do
-             %{"fileType" => file_type} when is_binary(file_type) ->
-               String.starts_with?(file_type, "video/") or String.starts_with?(file_type, "model/")
-
-             _ ->
-               false
-           end
-         end) do
+    case Enum.find(assets, &animation_asset?/1) do
       %{"url" => url} -> url
       _ -> nil
     end
   end
 
   defp extract_lsp4_animation_url(_), do: nil
+
+  defp animation_asset?(%{"fileType" => file_type}) when is_binary(file_type) do
+    String.starts_with?(file_type, "video/") or String.starts_with?(file_type, "model/")
+  end
+
+  defp animation_asset?(_), do: false
 
   defp extract_lsp4_external_url(%{"links" => links}) when is_list(links) and length(links) > 0 do
     # links is an array of objects with title and url
