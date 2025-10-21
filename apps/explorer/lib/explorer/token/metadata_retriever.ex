@@ -6,7 +6,7 @@ defmodule Explorer.Token.MetadataRetriever do
   require Logger
 
   alias ABI.TypeDecoder
-  alias Explorer.{HttpClient, MetadataURIValidator, Repo}
+  alias Explorer.{HttpClient, MetadataURIValidator}
   alias Explorer.Chain.{Hash, Token}
   alias Explorer.Helper, as: ExplorerHelper
   alias Explorer.SmartContract.Reader
@@ -580,10 +580,10 @@ defmodule Explorer.Token.MetadataRetriever do
           %{}
         end
 
-      %{@get_data_signature => {:ok, result}} ->
+      %{@get_data_signature => {:ok, _}} ->
         %{}
 
-      %{@get_data_signature => error} ->
+      %{@get_data_signature => _} ->
         %{}
 
       _ ->
@@ -612,7 +612,7 @@ defmodule Explorer.Token.MetadataRetriever do
         decode_lsp_bytes_from_raw(hex_data)
     end
   rescue
-    e ->
+    _e ->
       nil
   end
 
@@ -628,7 +628,7 @@ defmodule Explorer.Token.MetadataRetriever do
     MatchError ->
       validate_and_trim_raw_bytes(raw_bytes)
 
-    e ->
+    _e ->
       nil
   end
 
@@ -637,7 +637,7 @@ defmodule Explorer.Token.MetadataRetriever do
       [decoded_string] when is_binary(decoded_string) ->
         decoded_string
 
-      result ->
+      _result ->
         validate_and_trim_raw_bytes(raw_bytes)
     end
   end
@@ -650,19 +650,6 @@ defmodule Explorer.Token.MetadataRetriever do
     end
   end
 
-  @doc """
-  Decodes LSP2 VerifiableURI format.
-  Format: verification method + verification data + URI data
-
-  The actual format varies by verification method:
-  - 0x00008019f9b10000 (8 bytes) = keccak256(utf8) - NO hash stored, URI data follows directly
-  - 0x00006f357c6a0000 (8 bytes) = keccak256(bytes) - NO hash stored, URI data follows directly
-  - 0x0000000000000000 (8 bytes) = No verification - URI data follows directly
-
-  ## Returns
-    - `{:ok, uri}` if successfully decoded
-    - `{:error, reason}` if failed
-  """
   @spec decode_verifiable_uri(binary()) :: {:ok, String.t()} | {:error, String.t()}
   defp decode_verifiable_uri(data) when byte_size(data) < 8 do
     {:error, "Data too short for VerifiableURI"}
@@ -717,9 +704,7 @@ defmodule Explorer.Token.MetadataRetriever do
   @spec decode_lsp8_metadata_uri(any(), integer() | Decimal.t(), any()) :: {:ok, [String.t()]} | {:error, String.t()}
   def decode_lsp8_metadata_uri(result, token_id, contract_address \\ nil)
 
-  def decode_lsp8_metadata_uri({:ok, [bytes_data]}, token_id, contract_address) when is_binary(bytes_data) do
-    bytes_hex = Base.encode16(bytes_data, case: :lower)
-
+  def decode_lsp8_metadata_uri({:ok, [bytes_data]}, token_id, _contract_address) when is_binary(bytes_data) do
     case decode_lsp_bytes(bytes_data) do
       base_uri when is_binary(base_uri) and base_uri != "" ->
         # Append token_id to base URI to create full metadata URI
@@ -736,23 +721,21 @@ defmodule Explorer.Token.MetadataRetriever do
         {:ok, [full_uri]}
 
       nil ->
-        bytes_hex = Base.encode16(bytes_data, case: :lower)
-
         {:error, "Failed to decode LSP8 base URI"}
 
       "" ->
         {:error, "LSP8 base URI is empty"}
 
-      other ->
+      _other ->
         {:error, "Failed to decode LSP8 base URI"}
     end
   end
 
-  def decode_lsp8_metadata_uri({:error, error}, token_id, contract_address) do
+  def decode_lsp8_metadata_uri({:error, error}, _token_id, _contract_address) do
     {:error, error}
   end
 
-  def decode_lsp8_metadata_uri(result, token_id, contract_address) do
+  def decode_lsp8_metadata_uri(_result, _token_id, _contract_address) do
     {:error, "Invalid getData response"}
   end
 
@@ -1217,7 +1200,11 @@ defmodule Explorer.Token.MetadataRetriever do
       {:error, :blacklist}
 
   """
-  @spec fetch_metadata_from_uri(String.t(), keyword(), String.t() | nil) :: {:ok, %{metadata: any}} | {:ok_store_uri, %{metadata: any}, String.t()} | {:error_code, any()} | {:error, binary()}
+  @spec fetch_metadata_from_uri(String.t(), keyword(), String.t() | nil) ::
+          {:ok, %{metadata: any}}
+          | {:ok_store_uri, %{metadata: any}, String.t()}
+          | {:error_code, any()}
+          | {:error, binary()}
   def fetch_metadata_from_uri(uri, ipfs_params, hex_token_id \\ nil) do
     case Application.get_env(:indexer, Indexer.Fetcher.TokenInstance.Helper)[:host_filtering_enabled?] &&
            !ipfs?(ipfs_params) && !arweave?(ipfs_params) && MetadataURIValidator.validate_uri(uri) do
