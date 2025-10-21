@@ -614,11 +614,10 @@ defmodule Explorer.Token.MetadataRetriever do
 
       :error ->
         decode_lsp_bytes_from_raw(hex_data)
-
     end
-    rescue
-      e ->
-        nil
+  rescue
+    e ->
+      nil
   end
 
   defp decode_lsp_bytes_from_raw(raw_bytes) do

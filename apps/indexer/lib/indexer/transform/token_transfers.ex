@@ -62,7 +62,7 @@ defmodule Indexer.Transform.TokenTransfers do
     rough_tokens =
       erc404_token_transfers.tokens ++
         erc1155_token_transfers.tokens ++
-        erc20_and_erc721_token_transfers.tokens ++ 
+        erc20_and_erc721_token_transfers.tokens ++
         weth_transfers.tokens ++
         lsp7_token_transfers.tokens ++
         lsp8_token_transfers.tokens
@@ -70,7 +70,7 @@ defmodule Indexer.Transform.TokenTransfers do
     rough_token_transfers =
       erc404_token_transfers.token_transfers ++
         erc1155_token_transfers.token_transfers ++
-        erc20_and_erc721_token_transfers.token_transfers ++ 
+        erc20_and_erc721_token_transfers.token_transfers ++
         weth_transfers.token_transfers ++
         lsp7_token_transfers.token_transfers ++
         lsp8_token_transfers.token_transfers
@@ -503,7 +503,9 @@ defmodule Indexer.Transform.TokenTransfers do
                contract_address_hash: Hash.Address.t(),
                type: String.t()
              }, map()}
-  defp parse_lsp7_params(%{second_topic: operator_topic, third_topic: from_topic, fourth_topic: to_topic, data: data} = log) do
+  defp parse_lsp7_params(
+         %{second_topic: operator_topic, third_topic: from_topic, fourth_topic: to_topic, data: data} = log
+       ) do
     # LSP7 Transfer event data contains: uint256 amount, bool force, bytes data
     # We only care about the amount
     [amount | _] = decode_data(data, [{:uint, 256}, :bool, :bytes])
@@ -538,7 +540,9 @@ defmodule Indexer.Transform.TokenTransfers do
                contract_address_hash: Hash.Address.t(),
                type: String.t()
              }, map()}
-  defp parse_lsp8_params(%{second_topic: operator_topic, third_topic: from_topic, fourth_topic: token_id_topic, data: data} = log) do
+  defp parse_lsp8_params(
+         %{second_topic: operator_topic, third_topic: from_topic, fourth_topic: token_id_topic, data: data} = log
+       ) do
     # LSP8 Transfer event has indexed parameters: operator, from, tokenId (as bytes32)
     # The 'to' address and other params are in the data field
     # Data contains: address to, bool force, bytes data

@@ -133,8 +133,8 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
 
        # LSP8 already has full URI with token_id, so don't set from_base_uri? = true
        [
-         {result_processed, normalize_token_id(token_type, token_id_prepared), contract_address_hash,
-          token_id_prepared, from_base_uri?}
+         {result_processed, normalize_token_id(token_type, token_id_prepared), contract_address_hash, token_id_prepared,
+          from_base_uri?}
          | acc
        ]
      end)
@@ -145,7 +145,8 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
   defp process_lsp8_result("LSP8", result, token_id_prepared, contract_address_hash) do
     case MetadataRetriever.decode_lsp8_metadata_uri(result, token_id_prepared, contract_address_hash) do
       {:ok, _} = success -> success
-      {:error, _} -> result  # Fall back to original result if LSP8 decoding fails
+      # Fall back to original result if LSP8 decoding fails
+      {:error, _} -> result
     end
   end
 
