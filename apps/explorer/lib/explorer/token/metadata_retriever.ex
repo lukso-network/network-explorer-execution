@@ -951,9 +951,11 @@ defmodule Explorer.Token.MetadataRetriever do
   defp fetch_json_from_uri({:ok, [token_uri_string]}, ipfs_params, token_id, hex_token_id, from_base_uri?) do
     case fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?) do
       {:ok, %{metadata: metadata}} ->
-        process_lsp4_metadata(metadata, token_uri_string)
+        # IPFS/Arweave/data URIs - don't store URI
+        {:ok, %{metadata: normalize_lsp4_metadata(metadata)}}
 
       {:ok_store_uri, %{metadata: metadata}, uri} ->
+        # Regular HTTP URIs - store URI
         processed_metadata = normalize_lsp4_metadata(metadata)
         {:ok_store_uri, %{metadata: processed_metadata}, uri}
 
@@ -969,10 +971,6 @@ defmodule Explorer.Token.MetadataRetriever do
     Logger.warning(["Unknown metadata uri format #{inspect(uri)}."], fetcher: :token_instances)
 
     {:error, "unknown metadata uri format"}
-  end
-
-  defp process_lsp4_metadata(metadata, uri) do
-    {:ok_store_uri, %{metadata: normalize_lsp4_metadata(metadata)}, uri}
   end
 
   @doc """

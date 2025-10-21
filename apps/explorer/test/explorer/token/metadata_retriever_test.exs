@@ -289,9 +289,9 @@ defmodule Explorer.Token.MetadataRetrieverTest do
       Application.put_env(:explorer, :token_functions_reader_max_retries, original)
     end
 
-    test "shortens strings larger than 255 characters" do
-      long_token_name_shortened =
-        "<button class=\"navbar-toggler\" type=\"button\" data-toggle=\"collapse\" data-target=\"#navbarSupportedContent\" aria-controls=\"navbarSupportedContent\" aria-expanded=\"false\" aria-label=\"<%= gettext(\"Toggle navigation\") %>\"> <span class=\"navbar-toggler-icon\"></sp"
+    test "does not shorten strings under 10,000 characters" do
+      long_token_name_full =
+        "<button class=\"navbar-toggler\" type=\"button\" data-toggle=\"collapse\" data-target=\"#navbarSupportedContent\" aria-controls=\"navbarSupportedContent\" aria-expanded=\"false\" aria-label=\"<%= gettext(\"Toggle navigation\") %>\"> <span class=\"navbar-toggler-icon\"></span> </button>"
 
       token = insert(:token, contract_address: build(:contract_address))
 
@@ -332,7 +332,7 @@ defmodule Explorer.Token.MetadataRetrieverTest do
       )
 
       expected = %{
-        name: long_token_name_shortened,
+        name: long_token_name_full,
         decimals: 18,
         total_supply: 1_000_000_000_000_000_000,
         symbol: "BNT"
@@ -341,9 +341,9 @@ defmodule Explorer.Token.MetadataRetrieverTest do
       assert MetadataRetriever.get_functions_of(token) == expected
     end
 
-    test "shortens strings larger than 255 characters with unicode graphemes" do
-      long_token_name_shortened =
-        "文章の論旨や要点を短くまとめて表現する要約文。学生の頃、レポート作成などで書いた経験があるものの、それ以降はまったく書いていないという人は多いことでしょう。  しかし、文章"
+    test "does not shorten strings under 10,000 characters with unicode graphemes" do
+      long_token_name_full =
+        "文章の論旨や要点を短くまとめて表現する要約文。学生の頃、レポート作成などで書いた経験があるものの、それ以降はまったく書いていないという人は多いことでしょう。  しかし、文章作成が苦手な人や、文章がわか"
 
       token = insert(:token, contract_address: build(:contract_address))
 
@@ -384,7 +384,7 @@ defmodule Explorer.Token.MetadataRetrieverTest do
       )
 
       expected = %{
-        name: long_token_name_shortened,
+        name: long_token_name_full,
         decimals: 18,
         total_supply: 1_000_000_000_000_000_000,
         symbol: "BNT"
