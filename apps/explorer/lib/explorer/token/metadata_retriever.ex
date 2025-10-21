@@ -603,10 +603,6 @@ defmodule Explorer.Token.MetadataRetriever do
     end
   end
 
-  defp decode_lsp_bytes(data) do
-    nil
-  end
-
   defp decode_lsp_bytes_from_hex(hex_data) do
     case Base.decode16(hex_data, case: :mixed) do
       {:ok, raw_bytes} ->
@@ -970,9 +966,7 @@ defmodule Explorer.Token.MetadataRetriever do
   end
 
   defp fetch_json_from_uri({:ok, [token_uri_string]}, ipfs_params, token_id, hex_token_id, from_base_uri?) do
-    result = fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?)
-
-    case result do
+    case fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?) do
       {:ok, %{metadata: metadata}} ->
         process_lsp4_metadata(metadata, token_uri_string)
 
@@ -980,8 +974,11 @@ defmodule Explorer.Token.MetadataRetriever do
         processed_metadata = normalize_lsp4_metadata(metadata)
         {:ok_store_uri, %{metadata: processed_metadata}, uri}
 
-      other ->
-        other
+      {:error, _} = error ->
+        error
+
+      {:error_code, _} = error_code ->
+        error_code
     end
   end
 
@@ -1050,7 +1047,6 @@ defmodule Explorer.Token.MetadataRetriever do
 
   defp extract_lsp4_image_url(%{"icon" => icons}), do: extract_lsp4_icon_url(icons)
   defp extract_lsp4_image_url(lsp4_data) when is_map(lsp4_data), do: extract_lsp4_icon_url(lsp4_data["icon"])
-  defp extract_lsp4_image_url(_), do: nil
 
   defp extract_lsp4_icon_url(icons) when is_list(icons) and length(icons) > 0 do
     # icon is an array of different sizes, get the largest or first one
@@ -1221,7 +1217,7 @@ defmodule Explorer.Token.MetadataRetriever do
       {:error, :blacklist}
 
   """
-  @spec fetch_metadata_from_uri(String.t(), keyword(), String.t() | nil) :: {:ok, %{metadata: any}} | {:error, binary()}
+  @spec fetch_metadata_from_uri(String.t(), keyword(), String.t() | nil) :: {:ok, %{metadata: any}} | {:ok_store_uri, %{metadata: any}, String.t()} | {:error_code, any()} | {:error, binary()}
   def fetch_metadata_from_uri(uri, ipfs_params, hex_token_id \\ nil) do
     case Application.get_env(:indexer, Indexer.Fetcher.TokenInstance.Helper)[:host_filtering_enabled?] &&
            !ipfs?(ipfs_params) && !arweave?(ipfs_params) && MetadataURIValidator.validate_uri(uri) do
