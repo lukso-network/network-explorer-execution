@@ -57,6 +57,7 @@ defmodule Explorer.Mixfile do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:phoenix_html, "== 4.2.1"},
       {:bamboo, "~> 2.5.0"},
       {:mime, "~> 2.0"},
       {:bcrypt_elixir, "~> 3.0"},
