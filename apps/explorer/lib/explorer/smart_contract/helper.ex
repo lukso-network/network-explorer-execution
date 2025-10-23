@@ -91,6 +91,7 @@ defmodule Explorer.SmartContract.Helper do
     |> HTML.html_escape()
     |> HTML.safe_to_string()
     |> String.trim()
+    |> String.replace("\0", "")
   end
 
   @doc """

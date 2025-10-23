@@ -1,6 +1,6 @@
 defmodule Indexer.Transform.TokenTransfers do
   @moduledoc """
-  Helper functions for transforming data for known token standards (ERC-20, ERC-721, ERC-1155, ERC-404) transfers.
+  Helper functions for transforming data for known token standards (ERC-20, ERC-721, ERC-1155, ERC-404, LSP7, LSP8) transfers.
   """
 
   require Logger
@@ -49,15 +49,31 @@ defmodule Indexer.Transform.TokenTransfers do
       end)
       |> Enum.reduce(initial_acc, &do_parse(&1, &2, :erc404))
 
+    lsp7_token_transfers =
+      logs
+      |> Enum.filter(&(&1.first_topic == TokenTransfer.lsp7_transfer_event()))
+      |> Enum.reduce(initial_acc, &do_parse(&1, &2, :lsp7))
+
+    lsp8_token_transfers =
+      logs
+      |> Enum.filter(&(&1.first_topic == TokenTransfer.lsp8_transfer_event()))
+      |> Enum.reduce(initial_acc, &do_parse(&1, &2, :lsp8))
+
     rough_tokens =
       erc404_token_transfers.tokens ++
         erc1155_token_transfers.tokens ++
-        erc20_and_erc721_token_transfers.tokens ++ weth_transfers.tokens
+        erc20_and_erc721_token_transfers.tokens ++
+        weth_transfers.tokens ++
+        lsp7_token_transfers.tokens ++
+        lsp8_token_transfers.tokens
 
     rough_token_transfers =
       erc404_token_transfers.token_transfers ++
         erc1155_token_transfers.token_transfers ++
-        erc20_and_erc721_token_transfers.token_transfers ++ weth_transfers.token_transfers
+        erc20_and_erc721_token_transfers.token_transfers ++
+        weth_transfers.token_transfers ++
+        lsp7_token_transfers.token_transfers ++
+        lsp8_token_transfers.token_transfers
 
     tokens = sanitize_token_types(rough_tokens, rough_token_transfers)
     token_transfers = sanitize_weth_transfers(tokens, rough_token_transfers, weth_transfers.token_transfers)
@@ -176,7 +192,7 @@ defmodule Indexer.Transform.TokenTransfers do
 
   defp token_type_priority(nil), do: -1
 
-  @token_types_priority_order ["ERC-20", "ERC-721", "ERC-1155", "ERC-404"]
+  @token_types_priority_order ["ERC-20", "ERC-721", "ERC-1155", "ERC-404", "LSP7", "LSP8"]
   defp token_type_priority(token_type) do
     Enum.find_index(@token_types_priority_order, &(&1 == token_type))
   end
@@ -186,6 +202,8 @@ defmodule Indexer.Transform.TokenTransfers do
       case type do
         :erc1155 -> parse_erc1155_params(log)
         :erc404 -> parse_erc404_params(log)
+        :lsp7 -> parse_lsp7_params(log)
+        :lsp8 -> parse_lsp8_params(log)
         _ -> parse_params(log)
       end
 
@@ -477,6 +495,90 @@ defmodule Indexer.Transform.TokenTransfers do
 
       {token, token_transfer}
     end
+  end
+
+  @spec parse_lsp7_params(map()) ::
+          nil
+          | {%{
+               contract_address_hash: Hash.Address.t(),
+               type: String.t()
+             }, map()}
+  defp parse_lsp7_params(
+         %{second_topic: operator_topic, third_topic: from_topic, fourth_topic: to_topic, data: data} = log
+       ) do
+    # LSP7 Transfer event data contains: uint256 amount, bool force, bytes data
+    # We only care about the amount
+    [amount | _] = decode_data(data, [{:uint, 256}, :bool, :bytes])
+
+    from_address_hash = truncate_address_hash(from_topic)
+    to_address_hash = truncate_address_hash(to_topic)
+
+    token_transfer = %{
+      amount: Decimal.new(amount || 0),
+      block_number: log.block_number,
+      block_hash: log.block_hash,
+      log_index: log.index,
+      from_address_hash: from_address_hash,
+      to_address_hash: to_address_hash,
+      token_contract_address_hash: log.address_hash,
+      transaction_hash: log.transaction_hash,
+      token_ids: nil,
+      token_type: "LSP7"
+    }
+
+    token = %{
+      contract_address_hash: log.address_hash,
+      type: "LSP7"
+    }
+
+    {token, token_transfer}
+  end
+
+  @spec parse_lsp8_params(map()) ::
+          nil
+          | {%{
+               contract_address_hash: Hash.Address.t(),
+               type: String.t()
+             }, map()}
+  defp parse_lsp8_params(
+         %{second_topic: operator_topic, third_topic: from_topic, fourth_topic: token_id_topic, data: data} = log
+       ) do
+    # LSP8 Transfer event has indexed parameters: operator, from, tokenId (as bytes32)
+    # The 'to' address and other params are in the data field
+    # Data contains: address to, bool force, bytes data
+
+    # Extract the token ID from the fourth topic (it's already a bytes32)
+    token_id = token_id_topic |> String.replace_prefix("0x", "") |> Base.decode16!(case: :mixed)
+    token_id_decimal = :binary.decode_unsigned(token_id)
+
+    # Decode the data field to get the 'to' address
+    [to_address_binary | _] = decode_data(data, [:address, :bool, :bytes])
+
+    # Convert binary address to hex string format with proper padding
+    # Pad the address to 32 bytes (64 hex chars) as expected by truncate_address_hash
+    to_address_hex = "0x000000000000000000000000" <> Base.encode16(to_address_binary, case: :lower)
+
+    from_address_hash = truncate_address_hash(from_topic)
+    to_address_hash = truncate_address_hash(to_address_hex)
+
+    token_transfer = %{
+      block_number: log.block_number,
+      block_hash: log.block_hash,
+      log_index: log.index,
+      from_address_hash: from_address_hash,
+      to_address_hash: to_address_hash,
+      token_contract_address_hash: log.address_hash,
+      token_ids: [token_id_decimal],
+      transaction_hash: log.transaction_hash,
+      token_type: "LSP8"
+    }
+
+    token = %{
+      contract_address_hash: log.address_hash,
+      type: "LSP8"
+    }
+
+    {token, token_transfer}
   end
 
   def filter_tokens_for_supply_update(token_transfers) do

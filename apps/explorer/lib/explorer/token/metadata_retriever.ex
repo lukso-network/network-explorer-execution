@@ -5,6 +5,7 @@ defmodule Explorer.Token.MetadataRetriever do
 
   require Logger
 
+  alias ABI.TypeDecoder
   alias Explorer.{HttpClient, MetadataURIValidator}
   alias Explorer.Chain.{Hash, Token}
   alias Explorer.Helper, as: ExplorerHelper
@@ -109,6 +110,25 @@ defmodule Explorer.Token.MetadataRetriever do
         }
       ],
       "stateMutability" => "view"
+    },
+    %{
+      "inputs" => [
+        %{
+          "internalType" => "bytes32",
+          "name" => "dataKey",
+          "type" => "bytes32"
+        }
+      ],
+      "name" => "getData",
+      "outputs" => [
+        %{
+          "internalType" => "bytes",
+          "name" => "dataValue",
+          "type" => "bytes"
+        }
+      ],
+      "stateMutability" => "view",
+      "type" => "function"
     }
   ]
 
@@ -135,6 +155,22 @@ defmodule Explorer.Token.MetadataRetriever do
 
   @total_supply_function %{
     @total_supply_signature => []
+  }
+
+  # 54f6127f = keccak256(getData(bytes32))
+  @get_data_signature "54f6127f"
+
+  # LSP4TokenName: keccak256('LSP4TokenName')
+  @lsp4_token_name_key "0xdeba1e292f8ba88238e10ab3c7f88bd4be4fac56cad5194b6ecceaf653468af1"
+  # LSP4TokenSymbol: keccak256('LSP4TokenSymbol')
+  @lsp4_token_symbol_key "0x2f0a68ab07768e01943a599e73362a0e17a63a72e94dd2e384d2c1d4db932756"
+
+  @lsp_get_data_name_function %{
+    @get_data_signature => [@lsp4_token_name_key]
+  }
+
+  @lsp_get_data_symbol_function %{
+    @get_data_signature => [@lsp4_token_symbol_key]
   }
 
   @doc """
@@ -224,7 +260,17 @@ defmodule Explorer.Token.MetadataRetriever do
         |> Enum.reverse()
       end
 
-    {:ok, processed_result}
+    final_result =
+      processed_result
+      |> Enum.map(fn token ->
+        if (!Map.has_key?(token, :name) || !Map.has_key?(token, :symbol)) && Map.has_key?(token, :contract_address_hash) do
+          try_to_fetch_lsp_metadata(token, token.contract_address_hash)
+        else
+          token
+        end
+      end)
+
+    {:ok, final_result}
   end
 
   def get_functions_of(%Token{contract_address_hash: contract_address_hash, type: type}, opts) do
@@ -238,7 +284,10 @@ defmodule Explorer.Token.MetadataRetriever do
       raw_metadata
       |> format_contract_functions_result(contract_address_hash)
 
-    metadata = try_to_fetch_erc_1155_name(base_metadata, contract_address_hash, type)
+    erc_metadata = try_to_fetch_erc_1155_name(base_metadata, contract_address_hash, type)
+
+    # Try LSP7/8 fetching if we don't have name or symbol
+    metadata = try_to_fetch_lsp_metadata(erc_metadata, contract_address_hash)
 
     if Enum.empty?(metadata) && set_skip_metadata do
       Map.put(
@@ -276,6 +325,36 @@ defmodule Explorer.Token.MetadataRetriever do
         _ ->
           base_metadata
       end
+    else
+      base_metadata
+    end
+  end
+
+  defp try_to_fetch_lsp_metadata(base_metadata, contract_address_hash) do
+    if !Map.has_key?(base_metadata, :name) || !Map.has_key?(base_metadata, :symbol) do
+      lsp_metadata = %{}
+
+      lsp_metadata =
+        if Map.has_key?(base_metadata, :name) do
+          lsp_metadata
+        else
+          raw_result = fetch_functions_from_contract(contract_address_hash, @lsp_get_data_name_function)
+          name_result = format_lsp_data_result(raw_result, :name)
+
+          Map.merge(lsp_metadata, name_result)
+        end
+
+      lsp_metadata =
+        if Map.has_key?(base_metadata, :symbol) do
+          lsp_metadata
+        else
+          raw_result = fetch_functions_from_contract(contract_address_hash, @lsp_get_data_symbol_function)
+          symbol_result = format_lsp_data_result(raw_result, :symbol)
+
+          Map.merge(lsp_metadata, symbol_result)
+        end
+
+      Map.merge(base_metadata, lsp_metadata)
     else
       base_metadata
     end
@@ -330,7 +409,8 @@ defmodule Explorer.Token.MetadataRetriever do
 
   defp fetch_functions_with_retries(contract_address_hash, contract_functions, accumulator, retries_left)
        when retries_left > 0 do
-    contract_functions_result = Reader.query_contract(contract_address_hash, @contract_abi, contract_functions, false)
+    contract_functions_result =
+      Reader.query_contract(contract_address_hash, nil, @contract_abi, contract_functions, false)
 
     functions_with_errors =
       Enum.filter(contract_functions_result, fn function ->
@@ -398,6 +478,7 @@ defmodule Explorer.Token.MetadataRetriever do
   defp atomized_key(@decimals_signature), do: :decimals
   defp atomized_key(@total_supply_signature), do: :total_supply
   defp atomized_key(@erc1155_contract_uri_signature), do: :name
+  defp atomized_key(@get_data_signature), do: :data
 
   # It's a temp fix to store tokens that have names and/or symbols with characters that the database
   # doesn't accept. See https://github.com/blockscout/blockscout/issues/669 for more info.
@@ -467,8 +548,9 @@ defmodule Explorer.Token.MetadataRetriever do
   defp handle_large_string(nil), do: nil
   defp handle_large_string(string), do: handle_large_string(string, byte_size(string))
 
-  defp handle_large_string(string, size) when size > 255,
-    do: string |> binary_part(0, 255) |> String.chunk(:valid) |> List.first()
+  # Increased limit from 255 to 10,000 since database columns are now TEXT type
+  defp handle_large_string(string, size) when size > 10_000,
+    do: string |> binary_part(0, 10_000) |> String.chunk(:valid) |> List.first()
 
   defp handle_large_string(string, _size), do: string
 
@@ -484,6 +566,177 @@ defmodule Explorer.Token.MetadataRetriever do
 
   defp remove_null_bytes(string) do
     String.replace(string, "\0", "")
+  end
+
+  defp format_lsp_data_result(contract_result, field_name) do
+    case contract_result do
+      %{@get_data_signature => {:ok, [bytes_data]}} when is_binary(bytes_data) ->
+        decoded = decode_lsp_bytes(bytes_data)
+
+        if decoded && String.valid?(decoded) && String.trim(decoded) != "" do
+          truncated = String.slice(String.trim(decoded), 0, 10_000)
+          %{field_name => truncated}
+        else
+          %{}
+        end
+
+      %{@get_data_signature => {:ok, _}} ->
+        %{}
+
+      %{@get_data_signature => _} ->
+        %{}
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp decode_lsp_bytes(<<"0x", hex_data::binary>>) do
+    decode_lsp_bytes_from_hex(hex_data)
+  end
+
+  defp decode_lsp_bytes(data) when is_binary(data) do
+    if String.match?(data, ~r/^[0-9a-fA-F]+$/) do
+      decode_lsp_bytes_from_hex(data)
+    else
+      decode_lsp_bytes_from_raw(data)
+    end
+  end
+
+  defp decode_lsp_bytes_from_hex(hex_data) do
+    case Base.decode16(hex_data, case: :mixed) do
+      {:ok, raw_bytes} ->
+        decode_lsp_bytes_from_raw(raw_bytes)
+
+      :error ->
+        decode_lsp_bytes_from_raw(hex_data)
+    end
+  rescue
+    _e ->
+      nil
+  end
+
+  defp decode_lsp_bytes_from_raw(raw_bytes) do
+    case decode_verifiable_uri(raw_bytes) do
+      {:ok, uri} when is_binary(uri) and uri != "" ->
+        uri
+
+      _ ->
+        decode_raw_bytes_with_type_decoder(raw_bytes)
+    end
+  rescue
+    MatchError ->
+      validate_and_trim_raw_bytes(raw_bytes)
+
+    _e ->
+      nil
+  end
+
+  defp decode_raw_bytes_with_type_decoder(raw_bytes) do
+    case TypeDecoder.decode_raw(raw_bytes, [:string]) do
+      [decoded_string] when is_binary(decoded_string) ->
+        decoded_string
+
+      _result ->
+        validate_and_trim_raw_bytes(raw_bytes)
+    end
+  end
+
+  defp validate_and_trim_raw_bytes(raw_bytes) do
+    if String.valid?(raw_bytes) do
+      String.trim(raw_bytes)
+    else
+      nil
+    end
+  end
+
+  @spec decode_verifiable_uri(binary()) :: {:ok, String.t()} | {:error, String.t()}
+  defp decode_verifiable_uri(data) when byte_size(data) < 8 do
+    {:error, "Data too short for VerifiableURI"}
+  end
+
+  defp decode_verifiable_uri(<<verification_method::binary-size(8), uri_data::binary>>) do
+    case verification_method do
+      # keccak256(utf8) - 0x00008019f9b10000
+      <<0x00, 0x00, 0x80, 0x19, 0xF9, 0xB1, 0x00, 0x00>> ->
+        decode_uri_data(uri_data)
+
+      # keccak256(bytes) - 0x00006f357c6a0000
+      <<0x00, 0x00, 0x6F, 0x35, 0x7C, 0x6A, 0x00, 0x00>> ->
+        decode_uri_data(uri_data)
+
+      # No verification - 0x0000000000000000
+      <<0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> ->
+        decode_uri_data(uri_data)
+
+      _ ->
+        # Unknown verification method, try to decode as-is
+        {:error, "Unknown verification method: 0x#{Base.encode16(verification_method, case: :lower)}"}
+    end
+  end
+
+  defp decode_uri_data(data) when byte_size(data) == 0, do: {:error, "Empty URI data"}
+
+  defp decode_uri_data(data) do
+    case :unicode.characters_to_binary(data, :utf8) do
+      decoded when is_binary(decoded) ->
+        {:ok, String.trim(decoded)}
+
+      _ ->
+        {:error, "URI data is not valid UTF-8"}
+    end
+  end
+
+  @doc """
+  Decodes LSP8 base URI from getData response and constructs full metadata URI.
+  LSP8 stores a base URI in getData(LSP8TokenMetadataBaseURI).
+  This function decodes the base URI and appends the token_id to create the full metadata URI.
+
+  ## Parameters
+    - result: The result from getData contract call
+    - token_id: The token ID to append to the base URI
+    - contract_address: The token contract address (optional, for logging)
+
+  ## Returns
+    - `{:ok, [full_metadata_uri]}` with token_id already appended
+    - `{:error, reason}` if failed
+  """
+  @spec decode_lsp8_metadata_uri(any(), integer() | Decimal.t(), any()) :: {:ok, [String.t()]} | {:error, String.t()}
+  def decode_lsp8_metadata_uri(result, token_id, contract_address \\ nil)
+
+  def decode_lsp8_metadata_uri({:ok, [bytes_data]}, token_id, _contract_address) when is_binary(bytes_data) do
+    case decode_lsp_bytes(bytes_data) do
+      base_uri when is_binary(base_uri) and base_uri != "" ->
+        # Append token_id to base URI to create full metadata URI
+        base_uri = String.trim(base_uri)
+
+        # Add token_id to the base URI
+        full_uri =
+          if String.ends_with?(base_uri, "/") do
+            base_uri <> to_string(token_id)
+          else
+            base_uri <> "/" <> to_string(token_id)
+          end
+
+        {:ok, [full_uri]}
+
+      nil ->
+        {:error, "Failed to decode LSP8 base URI"}
+
+      "" ->
+        {:error, "LSP8 base URI is empty"}
+
+      _other ->
+        {:error, "Failed to decode LSP8 base URI"}
+    end
+  end
+
+  def decode_lsp8_metadata_uri({:error, error}, _token_id, _contract_address) do
+    {:error, error}
+  end
+
+  def decode_lsp8_metadata_uri(_result, _token_id, _contract_address) do
+    {:error, "Invalid getData response"}
   end
 
   @doc """
@@ -696,7 +949,22 @@ defmodule Explorer.Token.MetadataRetriever do
   end
 
   defp fetch_json_from_uri({:ok, [token_uri_string]}, ipfs_params, token_id, hex_token_id, from_base_uri?) do
-    fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?)
+    case fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?) do
+      {:ok, %{metadata: metadata}} ->
+        # IPFS/Arweave/data URIs - don't store URI
+        {:ok, %{metadata: normalize_lsp4_metadata(metadata)}}
+
+      {:ok_store_uri, %{metadata: metadata}, uri} ->
+        # Regular HTTP URIs - store URI
+        processed_metadata = normalize_lsp4_metadata(metadata)
+        {:ok_store_uri, %{metadata: processed_metadata}, uri}
+
+      {:error, _} = error ->
+        error
+
+      {:error_code, _} = error_code ->
+        error_code
+    end
   end
 
   defp fetch_json_from_uri(uri, _ipfs_params, _token_id, _hex_token_id, _from_base_uri?) do
@@ -704,6 +972,112 @@ defmodule Explorer.Token.MetadataRetriever do
 
     {:error, "unknown metadata uri format"}
   end
+
+  @doc """
+  Normalizes LSP4Metadata structure to be compatible with standard NFT metadata format.
+
+  BlockScout uses these metadata fields:
+  - metadata (entire object stored)
+  - image_url / image (extracted for display)
+  - animation_url (for videos/animations)
+  - external_app_url / external_url (external links)
+  - name, description, attributes (displayed in UI)
+
+  LSP4Metadata structure:
+  - LSP4Metadata.name → name
+  - LSP4Metadata.description → description
+  - LSP4Metadata.images → image / image_url
+  - LSP4Metadata.icon → image / image_url (fallback)
+  - LSP4Metadata.links → external_url
+  - LSP4Metadata.attributes → attributes
+  - LSP4Metadata.assets → assets (videos/3D models)
+
+  ## Parameters
+    - metadata: The raw metadata map
+
+  ## Returns
+    - Normalized metadata map with standard NFT metadata fields
+  """
+  @spec normalize_lsp4_metadata(map()) :: map()
+  def normalize_lsp4_metadata(%{"LSP4Metadata" => lsp4_data} = metadata) when is_map(lsp4_data) do
+    normalized =
+      %{}
+      |> Map.put("name", lsp4_data["name"])
+      |> Map.put("description", lsp4_data["description"])
+      |> Map.put("attributes", normalize_lsp4_attributes(lsp4_data["attributes"]))
+      |> Map.put("image", extract_lsp4_image_url(lsp4_data))
+      |> Map.put("image_url", extract_lsp4_image_url(lsp4_data))
+      |> Map.put("animation_url", extract_lsp4_animation_url(lsp4_data))
+      |> Map.put("external_url", extract_lsp4_external_url(lsp4_data))
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    Map.merge(metadata, normalized)
+  end
+
+  def normalize_lsp4_metadata(metadata), do: metadata
+
+  defp extract_lsp4_image_url(%{"images" => images}) when is_list(images) and length(images) > 0 do
+    # images is an array of arrays, get the first image from the first array
+    case List.first(images) do
+      [first_image | _] when is_map(first_image) -> Map.get(first_image, "url")
+      first_image when is_map(first_image) -> Map.get(first_image, "url")
+      _ -> extract_lsp4_icon_url(images)
+    end
+  end
+
+  defp extract_lsp4_image_url(%{"icon" => icons}), do: extract_lsp4_icon_url(icons)
+  defp extract_lsp4_image_url(lsp4_data) when is_map(lsp4_data), do: extract_lsp4_icon_url(lsp4_data["icon"])
+
+  defp extract_lsp4_icon_url(icons) when is_list(icons) and length(icons) > 0 do
+    # icon is an array of different sizes, get the largest or first one
+    case List.first(icons) do
+      icon when is_map(icon) -> Map.get(icon, "url")
+      _ -> nil
+    end
+  end
+
+  defp extract_lsp4_icon_url(_), do: nil
+
+  defp extract_lsp4_animation_url(%{"assets" => assets}) when is_list(assets) and length(assets) > 0 do
+    # assets can contain videos or 3D models
+    # Find first video or animation asset
+    case Enum.find(assets, &animation_asset?/1) do
+      %{"url" => url} -> url
+      _ -> nil
+    end
+  end
+
+  defp extract_lsp4_animation_url(_), do: nil
+
+  defp animation_asset?(%{"fileType" => file_type}) when is_binary(file_type) do
+    String.starts_with?(file_type, "video/") or String.starts_with?(file_type, "model/")
+  end
+
+  defp animation_asset?(_), do: false
+
+  defp extract_lsp4_external_url(%{"links" => links}) when is_list(links) and length(links) > 0 do
+    # links is an array of objects with title and url
+    # Return the first link's URL
+    case List.first(links) do
+      %{"url" => url} -> url
+      _ -> nil
+    end
+  end
+
+  defp extract_lsp4_external_url(_), do: nil
+
+  defp normalize_lsp4_attributes(attributes) when is_list(attributes) do
+    Enum.map(attributes, fn
+      %{"key" => key, "value" => value} ->
+        %{"trait_type" => key, "value" => value}
+
+      attr ->
+        attr
+    end)
+  end
+
+  defp normalize_lsp4_attributes(_), do: nil
 
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp fetch_from_ipfs_or_ar?(token_uri_string, ipfs_params, token_id, hex_token_id, from_base_uri?) do
@@ -824,7 +1198,11 @@ defmodule Explorer.Token.MetadataRetriever do
       {:error, :blacklist}
 
   """
-  @spec fetch_metadata_from_uri(String.t(), keyword(), String.t() | nil) :: {:ok, %{metadata: any}} | {:error, binary()}
+  @spec fetch_metadata_from_uri(String.t(), keyword(), String.t() | nil) ::
+          {:ok, %{metadata: any}}
+          | {:ok_store_uri, %{metadata: any}, String.t()}
+          | {:error_code, any()}
+          | {:error, binary()}
   def fetch_metadata_from_uri(uri, ipfs_params, hex_token_id \\ nil) do
     case Application.get_env(:indexer, Indexer.Fetcher.TokenInstance.Helper)[:host_filtering_enabled?] &&
            !ipfs?(ipfs_params) && !arweave?(ipfs_params) && MetadataURIValidator.validate_uri(uri) do

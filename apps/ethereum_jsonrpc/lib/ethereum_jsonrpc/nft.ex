@@ -6,8 +6,13 @@ defmodule EthereumJSONRPC.NFT do
   @token_uri "c87b56dd"
   @base_uri "6c0360eb"
   @uri "0e89341c"
+  # getData(bytes32) for LSP8
+  @get_data "54f6127f"
 
   @vm_execution_error "VM execution error"
+
+  # LSP8TokenMetadataBaseURI: keccak256('LSP8TokenMetadataBaseURI')
+  @lsp8_token_metadata_base_uri_key "0x1a7628600c3bac7101f53697f48df381ddc36b9015e7d7c9c5633d1252aa2843"
 
   @erc_721_1155_abi [
     %{
@@ -59,6 +64,25 @@ defmodule EthereumJSONRPC.NFT do
         }
       ],
       "constant" => true
+    },
+    %{
+      "inputs" => [
+        %{
+          "internalType" => "bytes32",
+          "name" => "dataKey",
+          "type" => "bytes32"
+        }
+      ],
+      "name" => "getData",
+      "outputs" => [
+        %{
+          "internalType" => "bytes",
+          "name" => "dataValue",
+          "type" => "bytes"
+        }
+      ],
+      "stateMutability" => "view",
+      "type" => "function"
     }
   ]
 
@@ -151,7 +175,7 @@ defmodule EthereumJSONRPC.NFT do
   @doc """
     Prepares a request map for fetching metadata URL.
     ## Parameters
-    - `token_type`: Type of token (ERC-404, ERC-721, ERC-1155)
+    - `token_type`: Type of token (ERC-404, ERC-721, ERC-1155, LSP8)
     - `contract_address_hash_string`: String representation of the contract address
     - `token_id`: Token ID as integer
     - `from_base_uri?`: Boolean indicating if request is for base URI
@@ -173,6 +197,12 @@ defmodule EthereumJSONRPC.NFT do
     end
   end
 
+  def prepare_request("LSP8", contract_address_hash_string, _token_id, _from_base_uri?) do
+    # LSP8 uses getData(LSP8TokenMetadataBaseURI) to get the base URI
+    # The token_id will be appended by decode_lsp8_metadata_uri in helper.ex
+    prepare_lsp8_request(contract_address_hash_string)
+  end
+
   def prepare_request(_token_type, contract_address_hash_string, token_id, from_base_uri?) do
     request = %{
       contract_address: contract_address_hash_string,
@@ -192,6 +222,27 @@ defmodule EthereumJSONRPC.NFT do
   @spec prepare_token_id(any) :: any
   def prepare_token_id(%Decimal{} = token_id), do: Decimal.to_integer(token_id)
   def prepare_token_id(token_id), do: token_id
+
+  @doc """
+  Prepares request for LSP8 token metadata.
+  LSP8 uses getData(bytes32) with LSP8TokenMetadataBaseURI key to fetch the base URI.
+  The token ID will be appended by decode_lsp8_metadata_uri.
+
+  ## Parameters
+  - `contract_address_hash_string`: String representation of the contract address
+
+  ## Returns
+  - Map with request parameters for getData call
+  """
+  @spec prepare_lsp8_request(String.t()) :: map()
+  def prepare_lsp8_request(contract_address_hash_string) do
+    %{
+      contract_address: contract_address_hash_string,
+      block_number: nil,
+      method_id: @get_data,
+      args: [@lsp8_token_metadata_base_uri_key]
+    }
+  end
 
   @doc """
   Returns the ABI of uri, tokenURI, baseURI getters for ERC-721 and ERC-1155 tokens.

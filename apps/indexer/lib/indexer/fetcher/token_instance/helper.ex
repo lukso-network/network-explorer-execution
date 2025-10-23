@@ -107,23 +107,7 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
   end
 
   defp batch_fetch_instances_inner(token_instances, token_types_map, cryptokitties) do
-    contract_results =
-      (token_instances
-       |> Enum.map(fn {contract_address_hash, token_id} ->
-         {contract_address_hash, token_id, token_types_map[contract_address_hash.bytes]}
-       end)
-       |> NFT.batch_metadata_url_request(Application.get_env(:explorer, :json_rpc_named_arguments))
-       |> Enum.zip_reduce(token_instances, [], fn {result, from_base_uri?}, {contract_address_hash, token_id}, acc ->
-         token_id = NFT.prepare_token_id(token_id)
-
-         [
-           {result, normalize_token_id(token_types_map[contract_address_hash.bytes], token_id), contract_address_hash,
-            token_id, from_base_uri?}
-           | acc
-         ]
-       end)
-       |> Enum.reverse()) ++
-        cryptokitties
+    contract_results = prepare_contract_results(token_instances, token_types_map, cryptokitties)
 
     contract_results
     |> Enum.map(fn {result, normalized_token_id, _contract_address_hash, token_id, from_base_uri?} ->
@@ -132,6 +116,41 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
     |> Task.yield_many(:infinity)
     |> Enum.zip(contract_results)
   end
+
+  defp prepare_contract_results(token_instances, token_types_map, cryptokitties) do
+    (token_instances
+     |> Enum.map(fn {contract_address_hash, token_id} ->
+       {contract_address_hash, token_id, token_types_map[contract_address_hash.bytes]}
+     end)
+     |> NFT.batch_metadata_url_request(Application.get_env(:explorer, :json_rpc_named_arguments))
+     |> Enum.zip_reduce(token_instances, [], fn {result, from_base_uri?}, {contract_address_hash, token_id}, acc ->
+       token_id_prepared = NFT.prepare_token_id(token_id)
+       token_type = token_types_map[contract_address_hash.bytes]
+
+       # For LSP8, decode the base URI and append token_id inside decode_lsp8_metadata_uri
+       # This returns the complete metadata URI, so we don't set from_base_uri? = true
+       result_processed = process_lsp8_result(token_type, result, token_id_prepared, contract_address_hash)
+
+       # LSP8 already has full URI with token_id, so don't set from_base_uri? = true
+       [
+         {result_processed, normalize_token_id(token_type, token_id_prepared), contract_address_hash, token_id_prepared,
+          from_base_uri?}
+         | acc
+       ]
+     end)
+     |> Enum.reverse()) ++
+      cryptokitties
+  end
+
+  defp process_lsp8_result("LSP8", result, token_id_prepared, contract_address_hash) do
+    case MetadataRetriever.decode_lsp8_metadata_uri(result, token_id_prepared, contract_address_hash) do
+      {:ok, _} = success -> success
+      # Fall back to original result if LSP8 decoding fails
+      {:error, _} -> result
+    end
+  end
+
+  defp process_lsp8_result(_token_type, result, _token_id_prepared, _contract_address_hash), do: result
 
   @spec normalize_token_id(binary(), integer()) :: nil | binary()
   defp normalize_token_id("ERC-1155", token_id),

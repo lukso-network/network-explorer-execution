@@ -38,6 +38,7 @@ defmodule Explorer.Chain.Address.Name do
     |> cast(params, @allowed_fields)
     |> validate_required(@required_fields)
     |> trim_name()
+    |> remove_null_bytes_from_name()
     |> foreign_key_constraint(:address_hash)
   end
 
@@ -87,6 +88,15 @@ defmodule Explorer.Chain.Address.Name do
     case get_change(changeset, :name) do
       nil -> changeset
       name -> put_change(changeset, :name, String.trim(name))
+    end
+  end
+
+  defp remove_null_bytes_from_name(%Changeset{valid?: false} = changeset), do: changeset
+
+  defp remove_null_bytes_from_name(%Changeset{valid?: true} = changeset) do
+    case get_change(changeset, :name) do
+      nil -> changeset
+      name -> put_change(changeset, :name, String.replace(name, "\0", ""))
     end
   end
 end
