@@ -85,6 +85,43 @@ defmodule Indexer.Transform.TokenInstances do
 
   defp transfer_to_instances(
          %{
+           token_type: "LSP8" = token_type,
+           to_address_hash: to_address_hash,
+           token_ids: [token_id],
+           token_contract_address_hash: token_contract_address_hash,
+           block_number: block_number,
+           log_index: log_index
+         },
+         acc
+       ) do
+    params = %{
+      token_contract_address_hash: token_contract_address_hash,
+      token_id: token_id,
+      token_type: token_type,
+      owner_address_hash: to_address_hash,
+      owner_updated_at_block: block_number,
+      owner_updated_at_log_index: log_index
+    }
+
+    current_key = {token_contract_address_hash, token_id}
+
+    Map.update(
+      acc,
+      current_key,
+      params,
+      fn current ->
+        Enum.max_by([params, current], fn ti ->
+          {
+            Map.get(ti, :owner_updated_at_block, 0),
+            Map.get(ti, :owner_updated_at_log_index, 0)
+          }
+        end)
+      end
+    )
+  end
+
+  defp transfer_to_instances(
+         %{
            token_type: _token_type,
            token_ids: [_ | _] = token_ids,
            token_contract_address_hash: token_contract_address_hash

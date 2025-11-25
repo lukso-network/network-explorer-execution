@@ -232,7 +232,8 @@ defmodule Explorer.Chain.Token.Instance do
       %{
         "ERC-721" => &erc_721_token_instances_by_owner_address_hash/2,
         "ERC-1155" => &erc_1155_token_instances_by_address_hash/2,
-        "ERC-404" => &erc_404_token_instances_by_address_hash/2
+        "ERC-404" => &erc_404_token_instances_by_address_hash/2,
+        "LSP8" => &lsp8_token_instances_by_address_hash/2
       }
     )
   end
@@ -338,6 +339,41 @@ defmodule Explorer.Chain.Token.Instance do
 
   defp page_erc_404_token_instances(query, _), do: query
 
+  @spec lsp8_token_instances_by_address_hash(binary() | Hash.Address.t(), keyword) :: [__MODULE__.t()]
+  def lsp8_token_instances_by_address_hash(address_hash, options \\ []) do
+    paging_options = Keyword.get(options, :paging_options, Chain.default_paging_options())
+
+    case paging_options do
+      %PagingOptions{key: {0}, asc_order: false} ->
+        []
+
+      _ ->
+        necessity_by_association = Keyword.get(options, :necessity_by_association, %{})
+
+        __MODULE__
+        |> join(:inner, [ti], ctb in CurrentTokenBalance,
+          as: :ctb,
+          on:
+            ctb.token_contract_address_hash == ti.token_contract_address_hash and ctb.token_id == ti.token_id and
+              ctb.address_hash == ^address_hash
+        )
+        |> where([ctb: ctb], ctb.value > 0 and ctb.token_type == "LSP8")
+        |> order_by([ti], asc: ti.token_contract_address_hash, desc: ti.token_id)
+        |> limit(^paging_options.page_size)
+        |> ExplorerHelper.maybe_hide_scam_addresses(:token_contract_address_hash, options)
+        |> page_lsp8_token_instances(paging_options)
+        |> select_merge([ctb: ctb], %{current_token_balance: ctb})
+        |> Chain.join_associations(necessity_by_association)
+        |> Chain.select_repo(options).all()
+    end
+  end
+
+  defp page_lsp8_token_instances(query, %PagingOptions{key: {contract_address_hash, token_id, "LSP8"}}) do
+    page_token_instance(query, contract_address_hash, token_id)
+  end
+
+  defp page_lsp8_token_instances(query, _), do: query
+
   defp page_token_instance(query, contract_address_hash, token_id) do
     query
     |> where(
@@ -381,7 +417,8 @@ defmodule Explorer.Chain.Token.Instance do
       %{
         "ERC-721" => &erc_721_collections_by_address_hash/2,
         "ERC-1155" => &erc_1155_collections_by_address_hash/2,
-        "ERC-404" => &erc_404_collections_by_address_hash/2
+        "ERC-404" => &erc_404_collections_by_address_hash/2,
+        "LSP8" => &lsp8_collections_by_address_hash/2
       }
     )
   end
@@ -487,6 +524,46 @@ defmodule Explorer.Chain.Token.Instance do
   end
 
   defp page_erc_404_nft_collections(query, _), do: query
+
+  @spec lsp8_collections_by_address_hash(binary() | Hash.Address.t(), keyword) :: [
+          %{
+            token_contract_address_hash: Hash.Address.t(),
+            distinct_token_instances_count: integer(),
+            token_ids: [integer()]
+          }
+        ]
+  def lsp8_collections_by_address_hash(address_hash, options) do
+    paging_options = Keyword.get(options, :paging_options, Chain.default_paging_options())
+
+    CurrentTokenBalance
+    |> where([ctb], ctb.address_hash == ^address_hash and ctb.value > 0 and ctb.token_type == "LSP8")
+    |> group_by([ctb], ctb.token_contract_address_hash)
+    |> order_by([ctb], asc: ctb.token_contract_address_hash)
+    |> select([ctb], %{
+      token_contract_address_hash: ctb.token_contract_address_hash,
+      distinct_token_instances_count: fragment("COUNT(*)"),
+      token_ids: fragment("array_agg(?)", ctb.token_id)
+    })
+    |> ExplorerHelper.maybe_hide_scam_addresses(:token_contract_address_hash, options)
+    |> page_lsp8_nft_collections(paging_options)
+    |> limit(^paging_options.page_size)
+    |> Chain.select_repo(options).all()
+    |> Enum.map(&erc_1155_preload_nft(&1, address_hash, options))
+    |> Helper.custom_preload(
+      options,
+      Token,
+      :token_contract_address_hash,
+      :contract_address_hash,
+      :token,
+      Reputation.reputation_association()
+    )
+  end
+
+  defp page_lsp8_nft_collections(query, %PagingOptions{key: {contract_address_hash, "LSP8"}}) do
+    page_nft_collections(query, contract_address_hash)
+  end
+
+  defp page_lsp8_nft_collections(query, _), do: query
 
   defp page_nft_collections(query, token_contract_address_hash) do
     query
@@ -890,7 +967,7 @@ defmodule Explorer.Chain.Token.Instance do
       token_transfers
       |> Enum.reduce(MapSet.new(), fn
         %TokenTransfer{token_type: nft_token_type} = token_transfer, ids
-        when nft_token_type in ["ERC-721", "ERC-1155", "ERC-404"] ->
+        when nft_token_type in ["ERC-721", "ERC-1155", "ERC-404", "LSP8"] ->
           MapSet.put(ids, {List.first(token_transfer.token_ids), token_transfer.token_contract_address_hash.bytes})
 
         _token_transfer, ids ->
@@ -911,7 +988,7 @@ defmodule Explorer.Chain.Token.Instance do
 
     Enum.map(token_transfers, fn
       %TokenTransfer{token_type: nft_token_type} = token_transfer
-      when nft_token_type in ["ERC-721", "ERC-1155", "ERC-404"] ->
+      when nft_token_type in ["ERC-721", "ERC-1155", "ERC-404", "LSP8"] ->
         %TokenTransfer{
           token_transfer
           | token_instance:
