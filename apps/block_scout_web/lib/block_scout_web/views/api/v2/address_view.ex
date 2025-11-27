@@ -207,6 +207,7 @@ defmodule BlockScoutWeb.API.V2.AddressView do
   end
 
   defp value("ERC-721", _), do: "1"
+  defp value("LSP8", _), do: "1"
   defp value(_, nft), do: nft.current_token_balance && to_string(nft.current_token_balance.value)
 
   defp string_or_null(nil), do: nil

@@ -975,7 +975,7 @@ defmodule Explorer.Chain.Import.Runner.Blocks do
     if DenormalizationHelper.tt_denormalization_finished?() do
       from(token_transfer in TokenTransfer,
         where: token_transfer.transaction_hash in ^forked_transaction_hashes,
-        where: token_transfer.token_type == "ERC-721",
+        where: token_transfer.token_type in ["ERC-721", "LSP8"],
         inner_join: instance in Instance,
         on:
           fragment("? @> ARRAY[?::decimal]", token_transfer.token_ids, instance.token_id) and
@@ -998,7 +998,7 @@ defmodule Explorer.Chain.Import.Runner.Blocks do
         where: token_transfer.transaction_hash in ^forked_transaction_hashes,
         inner_join: token in Token,
         on: token.contract_address_hash == token_transfer.token_contract_address_hash,
-        where: token.type == "ERC-721",
+        where: token.type in ["ERC-721", "LSP8"],
         inner_join: instance in Instance,
         on:
           fragment("? @> ARRAY[?::decimal]", token_transfer.token_ids, instance.token_id) and

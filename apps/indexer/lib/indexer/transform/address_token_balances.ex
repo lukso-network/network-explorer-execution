@@ -18,7 +18,7 @@ defmodule Indexer.Transform.AddressTokenBalances do
                                  token_contract_address_hash: token_contract_address_hash,
                                  token_ids: token_ids,
                                  token: %{type: token_type}
-                               },
+                               } = transfer,
                                acc
                                when is_integer(block_number) and is_binary(from_address_hash) and
                                       is_binary(to_address_hash) and is_binary(token_contract_address_hash) ->
@@ -27,21 +27,56 @@ defmodule Indexer.Transform.AddressTokenBalances do
 
       Enum.reduce(sanitized_token_ids, acc, fn id, sub_acc ->
         sub_acc
-        |> add_token_balance_address(from_address_hash, token_contract_address_hash, id, token_type, block_number)
-        |> add_token_balance_address(to_address_hash, token_contract_address_hash, id, token_type, block_number)
+        |> add_token_balance_address(
+          from_address_hash,
+          token_contract_address_hash,
+          id,
+          token_type,
+          block_number,
+          transfer
+        )
+        |> add_token_balance_address(
+          to_address_hash,
+          token_contract_address_hash,
+          id,
+          token_type,
+          block_number,
+          transfer
+        )
       end)
     end)
   end
 
-  defp add_token_balance_address(map_set, unquote(burn_address_hash_string()), _, _, _, _), do: map_set
+  defp add_token_balance_address(map_set, unquote(burn_address_hash_string()), _, _, _, _, _), do: map_set
 
-  defp add_token_balance_address(map_set, address, token_contract_address, token_id, token_type, block_number) do
+  defp add_token_balance_address(
+         map_set,
+         address,
+         token_contract_address,
+         token_id,
+         token_type,
+         block_number,
+         transfer
+       ) do
     MapSet.put(map_set, %{
       address_hash: address,
       token_contract_address_hash: token_contract_address,
       block_number: block_number,
       token_id: token_id,
-      token_type: token_type
+      token_type: token_type,
+      value: lsp8_value(token_type, address, transfer),
+      value_fetched_at: lsp8_value_fetched_at(token_type)
     })
   end
+
+  # For LSP8 tokens, set value based on transfer direction (1 for recipient, 0 for sender)
+  defp lsp8_value("LSP8", address, %{to_address_hash: to_address_hash}) do
+    if address == to_address_hash, do: Decimal.new(1), else: Decimal.new(0)
+  end
+
+  defp lsp8_value(_, _, _), do: nil
+
+  # For LSP8 tokens, set value_fetched_at to mark as fetched
+  defp lsp8_value_fetched_at("LSP8"), do: DateTime.utc_now()
+  defp lsp8_value_fetched_at(_), do: nil
 end

@@ -334,7 +334,7 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalances do
       changes_list
       |> Enum.map(fn change ->
         if Map.has_key?(change, :token_id) and
-             (Map.get(change, :token_type) == "ERC-1155" || Map.get(change, :token_type) == "ERC-404") do
+             Map.get(change, :token_type) in ["ERC-1155", "ERC-404", "LSP8"] do
           change
         else
           Map.put(change, :token_id, nil)

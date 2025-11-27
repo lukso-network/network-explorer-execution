@@ -63,7 +63,9 @@ defmodule Indexer.Transform.AddressTokenBalancesTest do
                    block_number: 1,
                    token_contract_address_hash: "0xe18035bf8712672935fdb4e5e431b1a0183d2dfc",
                    token_id: nil,
-                   token_type: "ERC-721"
+                   token_type: "ERC-721",
+                   value: nil,
+                   value_fetched_at: nil
                  }
                ])
     end
@@ -93,7 +95,9 @@ defmodule Indexer.Transform.AddressTokenBalancesTest do
                    block_number: 1,
                    token_contract_address_hash: "0xe18035bf8712672935fdb4e5e431b1a0183d2dfc",
                    token_id: 1,
-                   token_type: "ERC-1155"
+                   token_type: "ERC-1155",
+                   value: nil,
+                   value_fetched_at: nil
                  }
                ])
     end
