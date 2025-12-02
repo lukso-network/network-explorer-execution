@@ -8,11 +8,26 @@ defmodule EthereumJSONRPC.NFT do
   @uri "0e89341c"
   # getData(bytes32) for LSP8
   @get_data "54f6127f"
+  # getDataForTokenId(bytes32 tokenId, bytes32 dataKey) for LSP8 per-token metadata
+  @get_data_for_token_id "16e023b3"
 
   @vm_execution_error "VM execution error"
 
   # LSP8TokenMetadataBaseURI: keccak256('LSP8TokenMetadataBaseURI')
   @lsp8_token_metadata_base_uri_key "0x1a7628600c3bac7101f53697f48df381ddc36b9015e7d7c9c5633d1252aa2843"
+
+  # LSP8TokenIdFormat: keccak256('LSP8TokenIdFormat')
+  # Describes how to interpret the bytes32 tokenId:
+  # 0 = uint256 (number, left-padded)
+  # 1 = string (UTF-8, right-padded, max 32 chars)
+  # 2 = address (left-padded)
+  # 3 = bytes32 (unique identifier, right-padded)
+  # 4 = bytes32 (hash digest, no padding)
+  @lsp8_token_id_format_key "0xf675e9361af1c1664c1868cfa3eb97672d6b1a513aa5b81dec34c9ee330e818d"
+
+  # LSP4Metadata: keccak256('LSP4Metadata')
+  # Used with getDataForTokenId to fetch per-token metadata
+  @lsp4_metadata_key "0x9afb95cacc9f95858ec44aa8c3b685511002e30ae54415823f406128b85b238e"
 
   @erc_721_1155_abi [
     %{
@@ -74,6 +89,30 @@ defmodule EthereumJSONRPC.NFT do
         }
       ],
       "name" => "getData",
+      "outputs" => [
+        %{
+          "internalType" => "bytes",
+          "name" => "dataValue",
+          "type" => "bytes"
+        }
+      ],
+      "stateMutability" => "view",
+      "type" => "function"
+    },
+    %{
+      "inputs" => [
+        %{
+          "internalType" => "bytes32",
+          "name" => "tokenId",
+          "type" => "bytes32"
+        },
+        %{
+          "internalType" => "bytes32",
+          "name" => "dataKey",
+          "type" => "bytes32"
+        }
+      ],
+      "name" => "getDataForTokenId",
       "outputs" => [
         %{
           "internalType" => "bytes",
@@ -242,6 +281,249 @@ defmodule EthereumJSONRPC.NFT do
       method_id: @get_data,
       args: [@lsp8_token_metadata_base_uri_key]
     }
+  end
+
+  @doc """
+  Prepares request for LSP8 token ID format.
+  LSP8TokenIdFormat describes how to interpret the bytes32 tokenId.
+
+  ## Parameters
+  - `contract_address_hash_string`: String representation of the contract address
+
+  ## Returns
+  - Map with request parameters for getData call
+  """
+  @spec prepare_lsp8_token_id_format_request(String.t()) :: map()
+  def prepare_lsp8_token_id_format_request(contract_address_hash_string) do
+    %{
+      contract_address: contract_address_hash_string,
+      block_number: nil,
+      method_id: @get_data,
+      args: [@lsp8_token_id_format_key]
+    }
+  end
+
+  @doc """
+  Fetches the LSP8TokenIdFormat for a contract.
+
+  ## Parameters
+  - `contract_address_hash`: The contract address
+  - `json_rpc_named_arguments`: Arguments for JSON RPC calls
+
+  ## Returns
+  - `{:ok, format}` where format is an integer (0-4, or 100-104 for mixed)
+  - `{:error, reason}` if failed
+  """
+  @spec fetch_lsp8_token_id_format(Explorer.Chain.Hash.Address.t() | String.t(), EthereumJSONRPC.json_rpc_named_arguments()) ::
+          {:ok, non_neg_integer()} | {:error, String.t()}
+  def fetch_lsp8_token_id_format(contract_address_hash, json_rpc_named_arguments) do
+    contract_address_hash_string = to_string(contract_address_hash)
+
+    [prepare_lsp8_token_id_format_request(contract_address_hash_string)]
+    |> EthereumJSONRPC.execute_contract_functions(@erc_721_1155_abi, json_rpc_named_arguments, false)
+    |> case do
+      [{:ok, [bytes_data]}] when is_binary(bytes_data) ->
+        # The format is stored as uint256 in bytes
+        format = :binary.decode_unsigned(bytes_data)
+        {:ok, format}
+
+      [{:error, error}] ->
+        {:error, to_string(error)}
+
+      _ ->
+        # Default to format 0 (number) if not set
+        {:ok, 0}
+    end
+  end
+
+  @doc """
+  Formats an LSP8 token ID according to the LSP8TokenIdFormat for use in metadata URIs.
+
+  ## Token ID Format Types:
+  - 0: uint256 (number) - left-padded bytes32, displayed as decimal number
+  - 1: string - right-padded bytes32, displayed as UTF-8 string
+  - 2: address - left-padded bytes32, displayed as lowercase hex address
+  - 3: bytes32 (unique identifier) - right-padded, displayed as lowercase hex (no 0x prefix)
+  - 4: bytes32 (hash digest) - full 32 bytes, displayed as lowercase hex (no 0x prefix)
+
+  ## Parameters
+  - `token_id`: The token ID as integer or Decimal
+  - `format`: The LSP8TokenIdFormat value (0-4, or 100-104 for mixed)
+
+  ## Returns
+  - Formatted token ID string suitable for use in metadata URI
+  """
+  @spec format_lsp8_token_id(integer() | Decimal.t(), non_neg_integer()) :: String.t()
+  def format_lsp8_token_id(token_id, format) do
+    token_id_int =
+      case token_id do
+        %Decimal{} -> Decimal.to_integer(token_id)
+        int when is_integer(int) -> int
+      end
+
+    # For mixed formats (100-104), use the corresponding base format
+    effective_format = if format >= 100, do: format - 100, else: format
+
+    case effective_format do
+      0 ->
+        # uint256: display as decimal number
+        to_string(token_id_int)
+
+      1 ->
+        # string: convert to bytes32, trim trailing zeros, decode as UTF-8
+        bytes32 = to_bytes32(token_id_int)
+        # For strings, data is right-padded with zeros, so trim from right
+        trimmed = String.trim_trailing(bytes32, <<0>>)
+
+        case :unicode.characters_to_binary(trimmed, :utf8) do
+          utf8_string when is_binary(utf8_string) ->
+            # URL encode the string for use in URIs
+            URI.encode(utf8_string)
+
+          _ ->
+            # Fall back to hex if not valid UTF-8
+            Base.encode16(bytes32, case: :lower)
+        end
+
+      2 ->
+        # address: take last 20 bytes, display as lowercase hex address
+        bytes32 = to_bytes32(token_id_int)
+        # Address is in the last 20 bytes (left-padded)
+        <<_::binary-size(12), address_bytes::binary-size(20)>> = bytes32
+        "0x" <> Base.encode16(address_bytes, case: :lower)
+
+      3 ->
+        # bytes32 (unique identifier): right-padded, display as lowercase hex without 0x
+        bytes32 = to_bytes32(token_id_int)
+        Base.encode16(bytes32, case: :lower)
+
+      4 ->
+        # bytes32 (hash digest): display full 32 bytes as lowercase hex without 0x
+        bytes32 = to_bytes32(token_id_int)
+        Base.encode16(bytes32, case: :lower)
+
+      _ ->
+        # Unknown format, default to decimal number
+        to_string(token_id_int)
+    end
+  end
+
+  # Convert integer to exactly 32 bytes (bytes32)
+  # If the encoded integer is less than 32 bytes, left-pad with zeros
+  # If the encoded integer is more than 32 bytes, take only the last 32 bytes
+  defp to_bytes32(int) when is_integer(int) do
+    bytes = :binary.encode_unsigned(int)
+    byte_size = byte_size(bytes)
+
+    cond do
+      byte_size == 32 ->
+        bytes
+
+      byte_size < 32 ->
+        # Left-pad with zeros
+        padding_size = 32 - byte_size
+        <<0::size(padding_size * 8), bytes::binary>>
+
+      byte_size > 32 ->
+        # Take only the last 32 bytes (truncate from left)
+        skip_bytes = byte_size - 32
+        <<_::binary-size(skip_bytes), last_32::binary-size(32)>> = bytes
+        last_32
+    end
+  end
+
+  @doc """
+  Returns the LSP8TokenIdFormat ERC725 data key.
+  """
+  @spec lsp8_token_id_format_key() :: String.t()
+  def lsp8_token_id_format_key, do: @lsp8_token_id_format_key
+
+  @doc """
+  Returns the LSP4Metadata ERC725 data key.
+  """
+  @spec lsp4_metadata_key() :: String.t()
+  def lsp4_metadata_key, do: @lsp4_metadata_key
+
+  @doc """
+  Converts a token ID to bytes32 format for use in getDataForTokenId calls.
+
+  ## Parameters
+  - `token_id`: The token ID as integer or Decimal
+
+  ## Returns
+  - bytes32 hex string with 0x prefix
+  """
+  @spec token_id_to_bytes32(integer() | Decimal.t()) :: String.t()
+  def token_id_to_bytes32(token_id) do
+    token_id_int =
+      case token_id do
+        %Decimal{} -> Decimal.to_integer(token_id)
+        int when is_integer(int) -> int
+      end
+
+    bytes32 = to_bytes32(token_id_int)
+    "0x" <> Base.encode16(bytes32, case: :lower)
+  end
+
+  @doc """
+  Prepares request for LSP8 per-token metadata using getDataForTokenId.
+  This is used as a fallback when LSP8TokenMetadataBaseURI is not set.
+
+  ## Parameters
+  - `contract_address_hash_string`: String representation of the contract address
+  - `token_id`: The token ID as integer or Decimal
+
+  ## Returns
+  - Map with request parameters for getDataForTokenId call
+  """
+  @spec prepare_lsp8_token_metadata_request(String.t(), integer() | Decimal.t()) :: map()
+  def prepare_lsp8_token_metadata_request(contract_address_hash_string, token_id) do
+    token_id_bytes32 = token_id_to_bytes32(token_id)
+
+    %{
+      contract_address: contract_address_hash_string,
+      block_number: nil,
+      method_id: @get_data_for_token_id,
+      args: [token_id_bytes32, @lsp4_metadata_key]
+    }
+  end
+
+  @doc """
+  Fetches LSP8 per-token metadata using getDataForTokenId with LSP4Metadata key.
+  This is used as a fallback when LSP8TokenMetadataBaseURI is not available.
+
+  ## Parameters
+  - `contract_address_hash`: The contract address
+  - `token_id`: The token ID
+  - `json_rpc_named_arguments`: Arguments for JSON RPC calls
+
+  ## Returns
+  - `{:ok, [metadata_bytes]}` with the raw metadata bytes
+  - `{:error, reason}` if failed
+  """
+  @spec fetch_lsp8_token_metadata(Explorer.Chain.Hash.Address.t() | String.t(), integer() | Decimal.t(), EthereumJSONRPC.json_rpc_named_arguments()) ::
+          {:ok, [binary()]} | {:error, String.t()}
+  def fetch_lsp8_token_metadata(contract_address_hash, token_id, json_rpc_named_arguments) do
+    contract_address_hash_string = to_string(contract_address_hash)
+
+    [prepare_lsp8_token_metadata_request(contract_address_hash_string, token_id)]
+    |> EthereumJSONRPC.execute_contract_functions(@erc_721_1155_abi, json_rpc_named_arguments, false)
+    |> case do
+      [{:ok, [bytes_data]}] when is_binary(bytes_data) and byte_size(bytes_data) > 0 ->
+        {:ok, [bytes_data]}
+
+      [{:ok, [<<>>]}] ->
+        {:error, "LSP4Metadata is empty for this token"}
+
+      [{:ok, []}] ->
+        {:error, "LSP4Metadata is empty for this token"}
+
+      [{:error, error}] ->
+        {:error, to_string(error)}
+
+      _ ->
+        {:error, "Failed to fetch LSP4Metadata for token"}
+    end
   end
 
   @doc """
