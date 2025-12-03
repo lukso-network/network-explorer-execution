@@ -5,6 +5,7 @@ defmodule Explorer.Helper do
   require Logger
 
   alias ABI.TypeDecoder
+  alias EthereumJSONRPC.NFT
   alias Explorer.Chain
   alias Explorer.Chain.{Address.Reputation, Address.ScamBadgeToAddress, Data, Hash, Wei}
 
@@ -693,4 +694,162 @@ defmodule Explorer.Helper do
   end
 
   def process_rpc_response(response, _node, _fallback), do: response
+
+  @doc """
+  Formats an LSP8 token ID according to LSP8TokenIdFormat for display in APIs.
+
+  ## Parameters
+  - `token_id`: The token ID as Decimal or integer
+  - `contract_address_hash`: The token contract address (used to fetch format)
+
+  ## Returns
+  - Formatted token ID string according to LSP8TokenIdFormat
+  """
+  @spec format_lsp8_token_id_for_display(Decimal.t() | integer() | nil, any()) :: String.t() | nil
+  def format_lsp8_token_id_for_display(nil, _contract_address_hash), do: nil
+
+  def format_lsp8_token_id_for_display(token_id, contract_address_hash) do
+    token_id_int =
+      case token_id do
+        %Decimal{} -> Decimal.to_integer(token_id)
+        int when is_integer(int) -> int
+      end
+
+    json_rpc_named_arguments = Application.get_env(:explorer, :json_rpc_named_arguments)
+
+    token_id_format =
+      case contract_address_hash do
+        nil ->
+          0
+
+        address ->
+          case NFT.fetch_lsp8_token_id_format(address, json_rpc_named_arguments) do
+            {:ok, format} -> format
+            {:error, _} -> 0
+          end
+      end
+
+    NFT.format_lsp8_token_id(token_id_int, token_id_format)
+  end
+
+  @doc """
+  Formats a token ID for display based on token type.
+  For LSP8 tokens, returns formatted according to LSP8TokenIdFormat.
+  For other tokens, returns the token ID as a Decimal.
+
+  ## Parameters
+  - `token_id`: The token ID as Decimal or integer
+  - `token_type`: The token type string (e.g., "LSP8", "ERC-721")
+  - `contract_address_hash`: The token contract address
+
+  ## Returns
+  - Formatted token ID (string for LSP8, Decimal for others)
+  """
+  @spec format_token_id_for_display(Decimal.t() | integer() | nil, String.t() | nil, any()) :: any()
+  def format_token_id_for_display(nil, _token_type, _contract_address_hash), do: nil
+
+  def format_token_id_for_display(token_id, "LSP8", contract_address_hash) do
+    format_lsp8_token_id_for_display(token_id, contract_address_hash)
+  end
+
+  def format_token_id_for_display(token_id, _token_type, _contract_address_hash), do: token_id
+
+  @doc """
+  Parses an LSP8 token ID from a string that could be in various formats.
+  Supports:
+  - Decimal numbers (e.g., "123")
+  - Hex strings with 0x prefix (e.g., "0xc499c563c3a04ceb3329b79ddf4c6cd222d1f7ea")
+  - Pure hex strings without prefix (40+ chars, e.g., addresses or bytes32)
+  - Plain strings (e.g., "MyToken") - converted to bytes and then to integer
+
+  ## Parameters
+  - `token_id_string`: The token ID string to parse
+
+  ## Returns
+  - `{:ok, integer}` with the parsed token ID as integer
+  - `{:error, :invalid_format}` if parsing fails
+  """
+  @spec parse_lsp8_token_id(String.t()) :: {:ok, integer()} | {:error, :invalid_format}
+  def parse_lsp8_token_id(token_id_string) when is_binary(token_id_string) do
+    trimmed = String.trim(token_id_string)
+
+    cond do
+      # Check if it's a hex string with 0x prefix (address or bytes32)
+      String.starts_with?(trimmed, "0x") or String.starts_with?(trimmed, "0X") ->
+        hex_part = String.slice(trimmed, 2..-1//1)
+        parse_hex_to_integer(hex_part)
+
+      # Check if it's a pure hex string (64 chars = bytes32, 40 chars = address)
+      String.match?(trimmed, ~r/^[0-9a-fA-F]+$/) and String.length(trimmed) >= 40 ->
+        parse_hex_to_integer(trimmed)
+
+      # Try to parse as decimal integer first
+      true ->
+        case Integer.parse(trimmed) do
+          {int, ""} ->
+            {:ok, int}
+
+          _ ->
+            # If not a decimal integer, treat as a plain string (LSP8 format 1)
+            # Convert string to bytes32 representation (right-padded with zeros)
+            {:ok, string_to_token_id_integer(trimmed)}
+        end
+    end
+  end
+
+  def parse_lsp8_token_id(_), do: {:error, :invalid_format}
+
+  defp parse_hex_to_integer(hex_string) do
+    case Base.decode16(hex_string, case: :mixed) do
+      {:ok, bytes} ->
+        {:ok, :binary.decode_unsigned(bytes)}
+
+      :error ->
+        {:error, :invalid_format}
+    end
+  end
+
+  # Convert a plain string to its bytes32 integer representation
+  # String is right-padded with zeros to 32 bytes
+  defp string_to_token_id_integer(string) do
+    bytes = string |> :binary.bin_to_list() |> :binary.list_to_bin()
+    byte_size = byte_size(bytes)
+
+    padded =
+      if byte_size >= 32 do
+        # Truncate to 32 bytes if longer
+        binary_part(bytes, 0, 32)
+      else
+        # Right-pad with zeros
+        padding_size = 32 - byte_size
+        bytes <> <<0::size(padding_size * 8)>>
+      end
+
+    :binary.decode_unsigned(padded)
+  end
+
+  @doc """
+  Parses a token ID string based on token type.
+  For LSP8 tokens, supports hex addresses and bytes32.
+  For other tokens, only supports decimal integers.
+
+  ## Parameters
+  - `token_id_string`: The token ID string to parse
+  - `token_type`: The token type string (e.g., "LSP8", "ERC-721")
+
+  ## Returns
+  - `{:ok, integer}` with the parsed token ID
+  - `{:error, :invalid_format}` if parsing fails
+  """
+  @spec parse_token_id(String.t(), String.t() | nil) :: {:ok, integer()} | {:error, :invalid_format}
+  def parse_token_id(token_id_string, "LSP8") do
+    parse_lsp8_token_id(token_id_string)
+  end
+
+  def parse_token_id(token_id_string, _token_type) do
+    case Integer.parse(token_id_string) do
+      {int, ""} -> {:ok, int}
+      _ -> {:error, :invalid_format}
+    end
+  end
 end

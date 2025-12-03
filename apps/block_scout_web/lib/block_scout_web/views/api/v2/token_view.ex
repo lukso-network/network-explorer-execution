@@ -7,6 +7,7 @@ defmodule BlockScoutWeb.API.V2.TokenView do
   alias Ecto.Association.NotLoaded
   alias Explorer.Chain.{Address, BridgedToken}
   alias Explorer.Chain.Token.Instance
+  alias Explorer.Helper, as: ExplorerHelper
 
   def render("token.json", %{token: nil = token, contract_address_hash: contract_address_hash}) do
     %{
@@ -107,8 +108,11 @@ defmodule BlockScoutWeb.API.V2.TokenView do
     Internal json rendering function
   """
   def prepare_token_instance(instance, token) do
+    token_type = token && token.type
+    contract_address_hash = token && token.contract_address_hash
+
     %{
-      "id" => instance.token_id,
+      "id" => format_token_id(instance.token_id, token_type, contract_address_hash),
       "metadata" => instance.metadata,
       "owner" => token_instance_owner(instance.is_unique, instance),
       "token" => render("token.json", %{token: token}),
@@ -121,6 +125,15 @@ defmodule BlockScoutWeb.API.V2.TokenView do
       "media_url" => Instance.get_media_url_from_metadata_for_nft_media_handler(instance.metadata)
     }
   end
+
+  # Format token ID based on token type
+  # For LSP8 tokens, returns a map with raw value, formatted value, and format type
+  # For other tokens, returns the raw decimal value
+  defp format_token_id(token_id, "LSP8", contract_address_hash) do
+    ExplorerHelper.format_lsp8_token_id_for_display(token_id, contract_address_hash)
+  end
+
+  defp format_token_id(token_id, _token_type, _contract_address_hash), do: token_id
 
   defp token_instance_owner(false, _instance), do: nil
   defp token_instance_owner(nil, _instance), do: nil

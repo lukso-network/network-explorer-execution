@@ -144,9 +144,31 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
 
   defp process_lsp8_result("LSP8", result, token_id_prepared, contract_address_hash) do
     case MetadataRetriever.decode_lsp8_metadata_uri(result, token_id_prepared, contract_address_hash) do
-      {:ok, _} = success -> success
-      # Fall back to original result if LSP8 decoding fails
-      {:error, _} -> result
+      {:ok, _} = success ->
+        success
+
+      {:error, _} ->
+        # Base URI method failed, try getDataForTokenId with LSP4Metadata
+        fetch_lsp8_token_metadata_fallback(contract_address_hash, token_id_prepared, result)
+    end
+  end
+
+  defp fetch_lsp8_token_metadata_fallback(contract_address_hash, token_id_prepared, fallback_result) do
+    json_rpc_named_arguments = Application.get_env(:explorer, :json_rpc_named_arguments)
+
+    case NFT.fetch_lsp8_token_metadata(contract_address_hash, token_id_prepared, json_rpc_named_arguments) do
+      {:ok, [metadata_bytes]} ->
+        decode_lsp4_metadata_or_fallback(metadata_bytes, fallback_result)
+
+      {:error, _} ->
+        fallback_result
+    end
+  end
+
+  defp decode_lsp4_metadata_or_fallback(metadata_bytes, fallback_result) do
+    case MetadataRetriever.decode_lsp4_metadata(metadata_bytes) do
+      {:ok, uri} -> {:ok, [uri]}
+      {:error, _} -> fallback_result
     end
   end
 

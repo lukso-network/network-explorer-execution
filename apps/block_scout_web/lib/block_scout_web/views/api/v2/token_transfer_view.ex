@@ -6,6 +6,7 @@ defmodule BlockScoutWeb.API.V2.TokenTransferView do
   alias Ecto.Association.NotLoaded
   alias Explorer.Chain
   alias Explorer.Chain.{TokenTransfer, Transaction}
+  alias Explorer.Helper, as: ExplorerHelper
 
   def render("token_transfer.json", %{token_transfer: nil}) do
     nil
@@ -70,18 +71,26 @@ defmodule BlockScoutWeb.API.V2.TokenTransferView do
   @spec prepare_token_transfer_total(TokenTransfer.t()) :: map()
   # credo:disable-for-next-line /Complexity/
   def prepare_token_transfer_total(token_transfer) do
+    token = token_transfer.token
+    token_type = token && token.type
+    contract_address_hash = token && token.contract_address_hash
+
     case TokensHelper.token_transfer_amount_for_api(token_transfer) do
       {:ok, :erc721_instance} ->
+        raw_token_id = token_transfer.token_ids && List.first(token_transfer.token_ids)
+
         %{
-          "token_id" => token_transfer.token_ids && List.first(token_transfer.token_ids),
+          "token_id" => format_token_id(raw_token_id, token_type, contract_address_hash),
           "token_instance" =>
             token_transfer.token_instance &&
               TokenView.prepare_token_instance(token_transfer.token_instance, token_transfer.token)
         }
 
       {:ok, :erc1155_erc404_instance, value, decimals} ->
+        raw_token_id = token_transfer.token_ids && List.first(token_transfer.token_ids)
+
         %{
-          "token_id" => token_transfer.token_ids && List.first(token_transfer.token_ids),
+          "token_id" => format_token_id(raw_token_id, token_type, contract_address_hash),
           "value" => value,
           "decimals" => decimals,
           "token_instance" =>
@@ -90,8 +99,10 @@ defmodule BlockScoutWeb.API.V2.TokenTransferView do
         }
 
       {:ok, :erc1155_erc404_instance, values, token_ids, decimals} ->
+        raw_token_id = token_ids && List.first(token_ids)
+
         %{
-          "token_id" => token_ids && List.first(token_ids),
+          "token_id" => format_token_id(raw_token_id, token_type, contract_address_hash),
           "value" => values && List.first(values),
           "decimals" => decimals,
           "token_instance" =>
@@ -106,4 +117,15 @@ defmodule BlockScoutWeb.API.V2.TokenTransferView do
         nil
     end
   end
+
+  # Format token ID based on token type
+  # For LSP8 tokens, returns a map with raw value, formatted value, and format type
+  # For other tokens, returns the raw decimal value
+  defp format_token_id(nil, _token_type, _contract_address_hash), do: nil
+
+  defp format_token_id(token_id, "LSP8", contract_address_hash) do
+    ExplorerHelper.format_lsp8_token_id_for_display(token_id, contract_address_hash)
+  end
+
+  defp format_token_id(token_id, _token_type, _contract_address_hash), do: token_id
 end

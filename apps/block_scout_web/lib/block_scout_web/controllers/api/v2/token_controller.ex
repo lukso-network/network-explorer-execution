@@ -356,7 +356,7 @@ defmodule BlockScoutWeb.API.V2.TokenController do
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params),
          {:not_found, {:ok, token}} <- {:not_found, Chain.token_from_address_hash(address_hash, @token_options)},
          {:not_found, false} <- {:not_found, Chain.erc_20_token?(token)},
-         {:format, {token_id, ""}} <- {:format, Integer.parse(token_id_string)},
+         {:format, {:ok, token_id}} <- {:format, Helper.parse_token_id(token_id_string, token.type)},
          {:ok, token_instance} <-
            Instance.nft_instance_by_token_id_and_token_address(token_id, address_hash, @api_true) do
       fill_metadata_url_task = maybe_run_fill_metadata_url_task(token_instance, token)
@@ -415,7 +415,7 @@ defmodule BlockScoutWeb.API.V2.TokenController do
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params),
          {:not_found, {:ok, token}} <- {:not_found, Chain.token_from_address_hash(address_hash, @api_true)},
          {:not_found, false} <- {:not_found, Chain.erc_20_token?(token)},
-         {:format, {token_id, ""}} <- {:format, Integer.parse(token_id_string)} do
+         {:format, {:ok, token_id}} <- {:format, Helper.parse_token_id(token_id_string, token.type)} do
       paging_options = paging_options(params)
 
       results =
@@ -469,7 +469,7 @@ defmodule BlockScoutWeb.API.V2.TokenController do
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params),
          {:not_found, {:ok, token}} <- {:not_found, Chain.token_from_address_hash(address_hash, @api_true)},
          {:not_found, false} <- {:not_found, Chain.erc_20_token?(token)},
-         {:format, {token_id, ""}} <- {:format, Integer.parse(token_id_string)} do
+         {:format, {:ok, token_id}} <- {:format, Helper.parse_token_id(token_id_string, token.type)} do
       paging_options = paging_options(params)
 
       results =
@@ -519,7 +519,7 @@ defmodule BlockScoutWeb.API.V2.TokenController do
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params),
          {:not_found, {:ok, token}} <- {:not_found, Chain.token_from_address_hash(address_hash, @api_true)},
          {:not_found, false} <- {:not_found, Chain.erc_20_token?(token)},
-         {:format, {token_id, ""}} <- {:format, Integer.parse(token_id_string)} do
+         {:format, {:ok, token_id}} <- {:format, Helper.parse_token_id(token_id_string, token.type)} do
       conn
       |> put_status(200)
       |> json(%{
@@ -676,7 +676,7 @@ defmodule BlockScoutWeb.API.V2.TokenController do
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params),
          {:not_found, {:ok, token}} <- {:not_found, Chain.token_from_address_hash(address_hash, @api_true)},
          {:not_found, false} <- {:not_found, Chain.erc_20_token?(token)},
-         {:format, {token_id, ""}} <- {:format, Integer.parse(token_id_string)},
+         {:format, {:ok, token_id}} <- {:format, Helper.parse_token_id(token_id_string, token.type)},
          {:ok, token_instance} <-
            Instance.nft_instance_by_token_id_and_token_address(token_id, address_hash, @api_true) do
       token_instance_with_token =

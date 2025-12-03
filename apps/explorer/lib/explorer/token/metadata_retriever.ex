@@ -6,6 +6,7 @@ defmodule Explorer.Token.MetadataRetriever do
   require Logger
 
   alias ABI.TypeDecoder
+  alias EthereumJSONRPC.NFT
   alias Explorer.{HttpClient, MetadataURIValidator}
   alias Explorer.Chain.{Hash, Token}
   alias Explorer.Helper, as: ExplorerHelper
@@ -571,14 +572,7 @@ defmodule Explorer.Token.MetadataRetriever do
   defp format_lsp_data_result(contract_result, field_name) do
     case contract_result do
       %{@get_data_signature => {:ok, [bytes_data]}} when is_binary(bytes_data) ->
-        decoded = decode_lsp_bytes(bytes_data)
-
-        if decoded && String.valid?(decoded) && String.trim(decoded) != "" do
-          truncated = String.slice(String.trim(decoded), 0, 10_000)
-          %{field_name => truncated}
-        else
-          %{}
-        end
+        process_lsp_data_bytes(bytes_data, field_name)
 
       %{@get_data_signature => {:ok, _}} ->
         %{}
@@ -588,6 +582,26 @@ defmodule Explorer.Token.MetadataRetriever do
 
       _ ->
         %{}
+    end
+  end
+
+  defp process_lsp_data_bytes(bytes_data, field_name) do
+    case decode_lsp_bytes(bytes_data) do
+      nil ->
+        %{}
+
+      decoded ->
+        sanitized = remove_null_bytes(decoded)
+        build_field_map_if_valid(sanitized, field_name)
+    end
+  end
+
+  defp build_field_map_if_valid(sanitized, field_name) do
+    if String.valid?(sanitized) && String.trim(sanitized) != "" do
+      truncated = String.slice(String.trim(sanitized), 0, 10_000)
+      %{field_name => truncated}
+    else
+      %{}
     end
   end
 
@@ -690,12 +704,13 @@ defmodule Explorer.Token.MetadataRetriever do
   @doc """
   Decodes LSP8 base URI from getData response and constructs full metadata URI.
   LSP8 stores a base URI in getData(LSP8TokenMetadataBaseURI).
-  This function decodes the base URI and appends the token_id to create the full metadata URI.
+  This function decodes the base URI and appends the properly formatted token_id
+  based on the LSP8TokenIdFormat stored in the contract.
 
   ## Parameters
     - result: The result from getData contract call
     - token_id: The token ID to append to the base URI
-    - contract_address: The token contract address (optional, for logging)
+    - contract_address: The token contract address (used to fetch LSP8TokenIdFormat)
 
   ## Returns
     - `{:ok, [full_metadata_uri]}` with token_id already appended
@@ -704,21 +719,10 @@ defmodule Explorer.Token.MetadataRetriever do
   @spec decode_lsp8_metadata_uri(any(), integer() | Decimal.t(), any()) :: {:ok, [String.t()]} | {:error, String.t()}
   def decode_lsp8_metadata_uri(result, token_id, contract_address \\ nil)
 
-  def decode_lsp8_metadata_uri({:ok, [bytes_data]}, token_id, _contract_address) when is_binary(bytes_data) do
+  def decode_lsp8_metadata_uri({:ok, [bytes_data]}, token_id, contract_address) when is_binary(bytes_data) do
     case decode_lsp_bytes(bytes_data) do
       base_uri when is_binary(base_uri) and base_uri != "" ->
-        # Append token_id to base URI to create full metadata URI
-        base_uri = String.trim(base_uri)
-
-        # Add token_id to the base URI
-        full_uri =
-          if String.ends_with?(base_uri, "/") do
-            base_uri <> to_string(token_id)
-          else
-            base_uri <> "/" <> to_string(token_id)
-          end
-
-        {:ok, [full_uri]}
+        build_lsp8_full_uri(base_uri, token_id, contract_address)
 
       nil ->
         {:error, "Failed to decode LSP8 base URI"}
@@ -737,6 +741,120 @@ defmodule Explorer.Token.MetadataRetriever do
 
   def decode_lsp8_metadata_uri(_result, _token_id, _contract_address) do
     {:error, "Invalid getData response"}
+  end
+
+  defp build_lsp8_full_uri(base_uri, token_id, contract_address) do
+    # Remove null bytes and trim the base URI
+    sanitized_base_uri = base_uri |> String.replace("\0", "") |> String.trim()
+
+    if sanitized_base_uri == "" do
+      {:error, "LSP8 base URI is empty"}
+    else
+      formatted_token_id = format_lsp8_token_id_for_uri(token_id, contract_address)
+      full_uri = append_token_id_to_uri(sanitized_base_uri, formatted_token_id)
+      {:ok, [full_uri]}
+    end
+  end
+
+  defp append_token_id_to_uri(base_uri, token_id) do
+    if String.ends_with?(base_uri, "/") do
+      base_uri <> token_id
+    else
+      base_uri <> "/" <> token_id
+    end
+  end
+
+  @doc """
+  Formats an LSP8 token ID for use in metadata URIs.
+  Fetches the LSP8TokenIdFormat from the contract and formats accordingly.
+
+  ## Parameters
+    - token_id: The token ID as integer or Decimal
+    - contract_address: The token contract address
+
+  ## Returns
+    - Formatted token ID string suitable for use in metadata URI
+  """
+  @spec format_lsp8_token_id_for_uri(integer() | Decimal.t(), any()) :: String.t()
+  def format_lsp8_token_id_for_uri(token_id, contract_address) do
+    json_rpc_named_arguments = Application.get_env(:explorer, :json_rpc_named_arguments)
+
+    token_id_format =
+      case contract_address do
+        nil ->
+          # No contract address, default to format 0 (number)
+          0
+
+        address ->
+          case NFT.fetch_lsp8_token_id_format(address, json_rpc_named_arguments) do
+            {:ok, format} -> format
+            {:error, _} -> 0
+          end
+      end
+
+    NFT.format_lsp8_token_id(token_id, token_id_format)
+  end
+
+  @doc """
+  Decodes LSP4Metadata bytes (VerifiableURI format) to extract the metadata URI.
+
+  VerifiableURI format:
+  - 2 bytes: identifier (0x0000)
+  - 4 bytes: verification method (e.g., 0x6f357c6a for keccak256(utf8))
+  - 2 bytes: verification data length
+  - N bytes: verification data (e.g., hash)
+  - Remaining: UTF-8 encoded URI
+
+  ## Parameters
+    - bytes_data: The raw bytes from getDataForTokenId call
+
+  ## Returns
+    - `{:ok, uri}` with the decoded metadata URI
+    - `{:error, reason}` if decoding fails
+  """
+  @spec decode_lsp4_metadata(binary()) :: {:ok, String.t()} | {:error, String.t()}
+  def decode_lsp4_metadata(bytes_data) when is_binary(bytes_data) do
+    case bytes_data do
+      # VerifiableURI format: 0x0000 + verification_method(4) + data_length(2) + data(N) + uri
+      <<0x00, 0x00, _verification_method::binary-size(4), data_length::16, rest::binary>> ->
+        decode_verifiable_uri_format(rest, data_length)
+
+      # Handle case where the data might be a direct URI without VerifiableURI wrapper
+      _ ->
+        decode_plain_uri(bytes_data)
+    end
+  end
+
+  def decode_lsp4_metadata(_), do: {:error, "Invalid LSP4Metadata data"}
+
+  defp decode_verifiable_uri_format(rest, data_length) do
+    if byte_size(rest) > data_length do
+      <<_verification_data::binary-size(data_length), uri_bytes::binary>> = rest
+      sanitized_bytes = :binary.replace(uri_bytes, <<0>>, <<>>, [:global])
+      decode_uri_bytes(sanitized_bytes)
+    else
+      {:error, "Invalid LSP4Metadata: not enough data for URI"}
+    end
+  end
+
+  defp decode_uri_bytes(sanitized_bytes) do
+    case :unicode.characters_to_binary(sanitized_bytes, :utf8) do
+      uri when is_binary(uri) and uri != "" ->
+        {:ok, String.trim(uri)}
+
+      _ ->
+        {:error, "Failed to decode URI from LSP4Metadata"}
+    end
+  end
+
+  defp decode_plain_uri(bytes_data) do
+    case decode_lsp_bytes(bytes_data) do
+      uri when is_binary(uri) and uri != "" ->
+        {:ok, String.replace(uri, "\0", "")}
+
+      _ ->
+        {:error, "Failed to decode LSP4Metadata"}
+    end
   end
 
   @doc """

@@ -1546,20 +1546,15 @@ defmodule BlockScoutWeb.API.V2.TokenControllerTest do
              } = json_response(request, 422)
     end
 
-    test "get 422 on invalid id", %{conn: conn} do
-      token = insert(:token, type: "ERC-1155")
+    test "get holders for hex token id (LSP8)", %{conn: conn} do
+      token = insert(:token, type: "LSP8")
 
       request = get(conn, "/api/v2/tokens/#{token.contract_address_hash}/instances/123ab/holders")
 
       assert %{
-               "errors" => [
-                 %{
-                   "detail" => "Invalid format. Expected ~r/^-?([1-9][0-9]*|0)$/",
-                   "source" => %{"pointer" => "/token_id_param"},
-                   "title" => "Invalid value"
-                 }
-               ]
-             } = json_response(request, 422)
+               "items" => [],
+               "next_page_params" => nil
+             } = json_response(request, 200)
     end
 
     test "get token transfers by instance", %{conn: conn} do

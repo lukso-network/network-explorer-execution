@@ -490,15 +490,16 @@ defmodule BlockScoutWeb.Schemas.API.V2.General do
 
   @doc """
   Returns a parameter definition for a token ID in the path.
+  Accepts decimal integers, hex strings (0x...), or plain strings for LSP8 tokens.
   """
   @spec token_id_param() :: Parameter.t()
   def token_id_param do
     %Parameter{
       name: :token_id_param,
       in: :path,
-      schema: IntegerStringNullable,
+      schema: %Schema{type: :string},
       required: true,
-      description: "Token ID for ERC-721/1155/404 tokens"
+      description: "Token ID - decimal integer for ERC-721/1155/404, or hex address/string for LSP8 tokens"
     }
   end
 
@@ -823,9 +824,9 @@ defmodule BlockScoutWeb.Schemas.API.V2.General do
     },
     "token_id" => %Parameter{
       in: :query,
-      schema: IntegerStringNullable,
+      schema: %Schema{type: :string, nullable: true},
       required: false,
-      description: "Token ID for paging",
+      description: "Token ID for paging (decimal integer or hex string for LSP8)",
       name: :token_id
     },
     # todo: eliminate in favour token_id
