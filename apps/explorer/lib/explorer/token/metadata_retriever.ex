@@ -735,6 +735,14 @@ defmodule Explorer.Token.MetadataRetriever do
     end
   end
 
+  def decode_lsp8_metadata_uri({:error, error}, _token_id, _contract_address) do
+    {:error, error}
+  end
+
+  def decode_lsp8_metadata_uri(_result, _token_id, _contract_address) do
+    {:error, "Invalid getData response"}
+  end
+
   defp build_lsp8_full_uri(base_uri, token_id, contract_address) do
     # Remove null bytes and trim the base URI
     sanitized_base_uri = base_uri |> String.replace("\0", "") |> String.trim()
@@ -754,14 +762,6 @@ defmodule Explorer.Token.MetadataRetriever do
     else
       base_uri <> "/" <> token_id
     end
-  end
-
-  def decode_lsp8_metadata_uri({:error, error}, _token_id, _contract_address) do
-    {:error, error}
-  end
-
-  def decode_lsp8_metadata_uri(_result, _token_id, _contract_address) do
-    {:error, "Invalid getData response"}
   end
 
   @doc """
@@ -825,6 +825,8 @@ defmodule Explorer.Token.MetadataRetriever do
     end
   end
 
+  def decode_lsp4_metadata(_), do: {:error, "Invalid LSP4Metadata data"}
+
   defp decode_verifiable_uri_format(rest, data_length) do
     if byte_size(rest) > data_length do
       <<_verification_data::binary-size(data_length), uri_bytes::binary>> = rest
@@ -854,8 +856,6 @@ defmodule Explorer.Token.MetadataRetriever do
         {:error, "Failed to decode LSP4Metadata"}
     end
   end
-
-  def decode_lsp4_metadata(_), do: {:error, "Invalid LSP4Metadata data"}
 
   @doc """
   Generates an IPFS link for the given unique identifier (UID).
