@@ -314,7 +314,10 @@ defmodule EthereumJSONRPC.NFT do
   - `{:ok, format}` where format is an integer (0-4, or 100-104 for mixed)
   - `{:error, reason}` if failed
   """
-  @spec fetch_lsp8_token_id_format(Explorer.Chain.Hash.Address.t() | String.t(), EthereumJSONRPC.json_rpc_named_arguments()) ::
+  @spec fetch_lsp8_token_id_format(
+          Explorer.Chain.Hash.Address.t() | String.t(),
+          EthereumJSONRPC.json_rpc_named_arguments()
+        ) ::
           {:ok, non_neg_integer()} | {:error, String.t()}
   def fetch_lsp8_token_id_format(contract_address_hash, json_rpc_named_arguments) do
     contract_address_hash_string = to_string(contract_address_hash)
@@ -355,56 +358,50 @@ defmodule EthereumJSONRPC.NFT do
   """
   @spec format_lsp8_token_id(integer() | Decimal.t(), non_neg_integer()) :: String.t()
   def format_lsp8_token_id(token_id, format) do
-    token_id_int =
-      case token_id do
-        %Decimal{} -> Decimal.to_integer(token_id)
-        int when is_integer(int) -> int
-      end
+    token_id_int = normalize_token_id(token_id)
+    effective_format = normalize_format(format)
+    format_token_id_by_type(token_id_int, effective_format)
+  end
 
-    # For mixed formats (100-104), use the corresponding base format
-    effective_format = if format >= 100, do: format - 100, else: format
+  defp normalize_token_id(%Decimal{} = token_id), do: Decimal.to_integer(token_id)
+  defp normalize_token_id(int) when is_integer(int), do: int
 
-    case effective_format do
-      0 ->
-        # uint256: display as decimal number
-        to_string(token_id_int)
+  defp normalize_format(format) when format >= 100, do: format - 100
+  defp normalize_format(format), do: format
 
-      1 ->
-        # string: convert to bytes32, trim trailing zeros, decode as UTF-8
-        bytes32 = to_bytes32(token_id_int)
-        # For strings, data is right-padded with zeros, so trim from right
-        trimmed = String.trim_trailing(bytes32, <<0>>)
+  defp format_token_id_by_type(token_id_int, 0), do: to_string(token_id_int)
 
-        case :unicode.characters_to_binary(trimmed, :utf8) do
-          utf8_string when is_binary(utf8_string) ->
-            # URL encode the string for use in URIs
-            URI.encode(utf8_string)
+  defp format_token_id_by_type(token_id_int, 1) do
+    bytes32 = to_bytes32(token_id_int)
+    trimmed = String.trim_trailing(bytes32, <<0>>)
+    format_as_string_or_hex(trimmed, bytes32)
+  end
 
-          _ ->
-            # Fall back to hex if not valid UTF-8
-            Base.encode16(bytes32, case: :lower)
-        end
+  defp format_token_id_by_type(token_id_int, 2) do
+    bytes32 = to_bytes32(token_id_int)
+    <<_::binary-size(12), address_bytes::binary-size(20)>> = bytes32
+    "0x" <> Base.encode16(address_bytes, case: :lower)
+  end
 
-      2 ->
-        # address: take last 20 bytes, display as lowercase hex address
-        bytes32 = to_bytes32(token_id_int)
-        # Address is in the last 20 bytes (left-padded)
-        <<_::binary-size(12), address_bytes::binary-size(20)>> = bytes32
-        "0x" <> Base.encode16(address_bytes, case: :lower)
+  defp format_token_id_by_type(token_id_int, 3) do
+    bytes32 = to_bytes32(token_id_int)
+    Base.encode16(bytes32, case: :lower)
+  end
 
-      3 ->
-        # bytes32 (unique identifier): right-padded, display as lowercase hex without 0x
-        bytes32 = to_bytes32(token_id_int)
-        Base.encode16(bytes32, case: :lower)
+  defp format_token_id_by_type(token_id_int, 4) do
+    bytes32 = to_bytes32(token_id_int)
+    Base.encode16(bytes32, case: :lower)
+  end
 
-      4 ->
-        # bytes32 (hash digest): display full 32 bytes as lowercase hex without 0x
-        bytes32 = to_bytes32(token_id_int)
-        Base.encode16(bytes32, case: :lower)
+  defp format_token_id_by_type(token_id_int, _), do: to_string(token_id_int)
+
+  defp format_as_string_or_hex(trimmed, bytes32) do
+    case :unicode.characters_to_binary(trimmed, :utf8) do
+      utf8_string when is_binary(utf8_string) ->
+        URI.encode(utf8_string)
 
       _ ->
-        # Unknown format, default to decimal number
-        to_string(token_id_int)
+        Base.encode16(bytes32, case: :lower)
     end
   end
 
@@ -501,7 +498,11 @@ defmodule EthereumJSONRPC.NFT do
   - `{:ok, [metadata_bytes]}` with the raw metadata bytes
   - `{:error, reason}` if failed
   """
-  @spec fetch_lsp8_token_metadata(Explorer.Chain.Hash.Address.t() | String.t(), integer() | Decimal.t(), EthereumJSONRPC.json_rpc_named_arguments()) ::
+  @spec fetch_lsp8_token_metadata(
+          Explorer.Chain.Hash.Address.t() | String.t(),
+          integer() | Decimal.t(),
+          EthereumJSONRPC.json_rpc_named_arguments()
+        ) ::
           {:ok, [binary()]} | {:error, String.t()}
   def fetch_lsp8_token_metadata(contract_address_hash, token_id, json_rpc_named_arguments) do
     contract_address_hash_string = to_string(contract_address_hash)

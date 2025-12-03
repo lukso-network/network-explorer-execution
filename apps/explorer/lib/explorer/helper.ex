@@ -5,6 +5,7 @@ defmodule Explorer.Helper do
   require Logger
 
   alias ABI.TypeDecoder
+  alias EthereumJSONRPC.NFT
   alias Explorer.Chain
   alias Explorer.Chain.{Address.Reputation, Address.ScamBadgeToAddress, Data, Hash, Wei}
 
@@ -722,13 +723,13 @@ defmodule Explorer.Helper do
           0
 
         address ->
-          case EthereumJSONRPC.NFT.fetch_lsp8_token_id_format(address, json_rpc_named_arguments) do
+          case NFT.fetch_lsp8_token_id_format(address, json_rpc_named_arguments) do
             {:ok, format} -> format
             {:error, _} -> 0
           end
       end
 
-    EthereumJSONRPC.NFT.format_lsp8_token_id(token_id_int, token_id_format)
+    NFT.format_lsp8_token_id(token_id_int, token_id_format)
   end
 
   @doc """
