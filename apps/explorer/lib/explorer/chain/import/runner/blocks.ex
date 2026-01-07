@@ -865,7 +865,9 @@ defmodule Explorer.Chain.Import.Runner.Blocks do
 
   defp save_internal_transactions_for_delete(repo, non_consensus_blocks, %{timeout: timeout, timestamps: timestamps}) do
     insert_params =
-      Enum.map(non_consensus_blocks, fn {number, _hash} ->
+      non_consensus_blocks
+      |> Enum.uniq_by(fn {number, _hash} -> number end)
+      |> Enum.map(fn {number, _hash} ->
         Map.put(timestamps, :block_number, number)
       end)
 
