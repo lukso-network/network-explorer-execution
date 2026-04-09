@@ -145,6 +145,20 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
         :maybe_shrink_internal_transactions_params
       )
     end)
+    |> Multi.run(:delete_internal_transactions, fn repo,
+                                                   %{
+                                                     maybe_shrink_internal_transactions_params:
+                                                       shrink_internal_transactions_params
+                                                   } ->
+      Instrumenter.block_import_stage_runner(
+        fn ->
+          delete_internal_transactions_for_blocks(repo, shrink_internal_transactions_params)
+        end,
+        :block_pending,
+        :internal_transactions,
+        :delete_internal_transactions
+      )
+    end)
     |> Multi.run(:internal_transactions, fn repo,
                                             %{
                                               maybe_shrink_internal_transactions_params:
@@ -207,6 +221,9 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
     # Enforce ShareLocks tables order (see docs: sharelocks.md)
     with {:ok, data} <-
            Multi.new()
+           |> Multi.run(:delete_internal_transactions, fn repo, _ ->
+             delete_internal_transactions_for_blocks(repo, internal_transactions_params)
+           end)
            |> Multi.run(:internal_transactions, fn repo, _ ->
              insert(repo, internal_transactions_params, insert_options)
            end)
@@ -298,6 +315,23 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
           internal_transaction.value
         )
     )
+  end
+
+  defp delete_internal_transactions_for_blocks(repo, internal_transactions_params) do
+    block_hashes =
+      internal_transactions_params
+      |> Enum.map(& &1[:block_hash])
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    if Enum.empty?(block_hashes) do
+      {:ok, []}
+    else
+      query = from(it in InternalTransaction, where: it.block_hash in ^block_hashes)
+      {deleted_count, _} = repo.delete_all(query)
+
+      {:ok, deleted_count}
+    end
   end
 
   defp acquire_blocks(repo, changes_list) do
