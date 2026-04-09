@@ -145,6 +145,20 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
         :maybe_shrink_internal_transactions_params
       )
     end)
+    |> Multi.run(:delete_internal_transactions, fn repo,
+                                                    %{
+                                                      maybe_shrink_internal_transactions_params:
+                                                        shrink_internal_transactions_params
+                                                    } ->
+      Instrumenter.block_import_stage_runner(
+        fn ->
+          delete_internal_transactions_for_blocks(repo, shrink_internal_transactions_params)
+        end,
+        :block_pending,
+        :internal_transactions,
+        :delete_internal_transactions
+      )
+    end)
     |> Multi.run(:internal_transactions, fn repo,
                                             %{
                                               maybe_shrink_internal_transactions_params:
@@ -207,6 +221,9 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
     # Enforce ShareLocks tables order (see docs: sharelocks.md)
     with {:ok, data} <-
            Multi.new()
+           |> Multi.run(:delete_internal_transactions, fn repo, _ ->
+             delete_internal_transactions_for_blocks(repo, internal_transactions_params)
+           end)
            |> Multi.run(:internal_transactions, fn repo, _ ->
              insert(repo, internal_transactions_params, insert_options)
            end)
@@ -235,7 +252,7 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
       Import.insert_changes_list(
         repo,
         ordered_changes_list,
-        conflict_target: [:block_hash, :transaction_index, :index],
+        conflict_target: [:block_hash, :block_index],
         for: InternalTransaction,
         on_conflict: on_conflict,
         returning: true,
@@ -251,7 +268,6 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
       internal_transaction in InternalTransaction,
       update: [
         set: [
-          block_index: fragment("EXCLUDED.block_index"),
           block_number: fragment("EXCLUDED.block_number"),
           call_type: fragment("EXCLUDED.call_type"),
           created_contract_address_hash: fragment("EXCLUDED.created_contract_address_hash"),
@@ -260,25 +276,28 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
           from_address_hash: fragment("EXCLUDED.from_address_hash"),
           gas: fragment("EXCLUDED.gas"),
           gas_used: fragment("EXCLUDED.gas_used"),
+          index: fragment("EXCLUDED.index"),
           init: fragment("EXCLUDED.init"),
           input: fragment("EXCLUDED.input"),
           output: fragment("EXCLUDED.output"),
           to_address_hash: fragment("EXCLUDED.to_address_hash"),
           trace_address: fragment("EXCLUDED.trace_address"),
           transaction_hash: fragment("EXCLUDED.transaction_hash"),
+          transaction_index: fragment("EXCLUDED.transaction_index"),
           type: fragment("EXCLUDED.type"),
           value: fragment("EXCLUDED.value"),
           inserted_at: fragment("LEAST(?, EXCLUDED.inserted_at)", internal_transaction.inserted_at),
           updated_at: fragment("GREATEST(?, EXCLUDED.updated_at)", internal_transaction.updated_at)
-          # Don't update `block_hash`, `transaction_index`, or `index` as they are used for the conflict target
+          # Don't update `block_hash` as it is used for the conflict target
+          # Don't update `block_index` as it is used for the conflict target
         ]
       ],
       # `IS DISTINCT FROM` is used because it allows `NULL` to be equal to itself
       where:
         fragment(
-          "(EXCLUDED.block_index, EXCLUDED.transaction_hash, EXCLUDED.call_type, EXCLUDED.created_contract_address_hash, EXCLUDED.created_contract_code, EXCLUDED.error, EXCLUDED.from_address_hash, EXCLUDED.gas, EXCLUDED.gas_used, EXCLUDED.init, EXCLUDED.input, EXCLUDED.output, EXCLUDED.to_address_hash, EXCLUDED.trace_address, EXCLUDED.type, EXCLUDED.value) IS DISTINCT FROM (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          internal_transaction.block_index,
+          "(EXCLUDED.transaction_hash, EXCLUDED.index, EXCLUDED.call_type, EXCLUDED.created_contract_address_hash, EXCLUDED.created_contract_code, EXCLUDED.error, EXCLUDED.from_address_hash, EXCLUDED.gas, EXCLUDED.gas_used, EXCLUDED.init, EXCLUDED.input, EXCLUDED.output, EXCLUDED.to_address_hash, EXCLUDED.trace_address, EXCLUDED.transaction_index, EXCLUDED.type, EXCLUDED.value) IS DISTINCT FROM (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           internal_transaction.transaction_hash,
+          internal_transaction.index,
           internal_transaction.call_type,
           internal_transaction.created_contract_address_hash,
           internal_transaction.created_contract_code,
@@ -291,10 +310,29 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
           internal_transaction.output,
           internal_transaction.to_address_hash,
           internal_transaction.trace_address,
+          internal_transaction.transaction_index,
           internal_transaction.type,
           internal_transaction.value
         )
     )
+  end
+
+  defp delete_internal_transactions_for_blocks(repo, internal_transactions_params) do
+    block_hashes =
+      internal_transactions_params
+      |> Enum.map(& &1[:block_hash])
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    if Enum.empty?(block_hashes) do
+      {:ok, []}
+    else
+      {deleted_count, _} =
+        from(it in InternalTransaction, where: it.block_hash in ^block_hashes)
+        |> repo.delete_all()
+
+      {:ok, deleted_count}
+    end
   end
 
   defp acquire_blocks(repo, changes_list) do
