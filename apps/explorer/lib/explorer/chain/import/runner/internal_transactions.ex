@@ -146,10 +146,10 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
       )
     end)
     |> Multi.run(:delete_internal_transactions, fn repo,
-                                                    %{
-                                                      maybe_shrink_internal_transactions_params:
-                                                        shrink_internal_transactions_params
-                                                    } ->
+                                                   %{
+                                                     maybe_shrink_internal_transactions_params:
+                                                       shrink_internal_transactions_params
+                                                   } ->
       Instrumenter.block_import_stage_runner(
         fn ->
           delete_internal_transactions_for_blocks(repo, shrink_internal_transactions_params)
@@ -327,9 +327,8 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
     if Enum.empty?(block_hashes) do
       {:ok, []}
     else
-      {deleted_count, _} =
-        from(it in InternalTransaction, where: it.block_hash in ^block_hashes)
-        |> repo.delete_all()
+      query = from(it in InternalTransaction, where: it.block_hash in ^block_hashes)
+      {deleted_count, _} = repo.delete_all(query)
 
       {:ok, deleted_count}
     end
