@@ -399,7 +399,7 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactionsTest do
         input: input,
         trace_address: [],
         transaction_hash: transaction.hash,
-        transaction_index: 0,
+        transaction_index: transaction.index,
         type: :stop,
         value: Wei.from(Decimal.new(0), :wei)
       }
@@ -441,6 +441,7 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactionsTest do
       index: index,
       trace_address: [],
       transaction_hash: transaction.hash,
+      transaction_index: transaction.index,
       type: :call,
       value: Wei.from(Decimal.new(1), :wei),
       error: error,
@@ -470,6 +471,7 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactionsTest do
       index: index,
       trace_address: [],
       transaction_hash: transaction.hash,
+      transaction_index: transaction.index,
       type: :call,
       value: Wei.from(Decimal.new(1), :wei),
       error: error,
