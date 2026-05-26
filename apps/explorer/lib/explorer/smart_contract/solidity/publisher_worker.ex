@@ -93,5 +93,15 @@ defmodule Explorer.SmartContract.Solidity.PublisherWorker do
       {:error, _changeset} ->
         VerificationStatus.update_status(uid, :fail)
     end
+  rescue
+    exception ->
+      Logger.error(fn ->
+        [
+          "Verification job crashed for #{address_hash}: ",
+          Exception.format(:error, exception, __STACKTRACE__)
+        ]
+      end)
+
+      VerificationStatus.update_status(uid, :fail)
   end
 end
