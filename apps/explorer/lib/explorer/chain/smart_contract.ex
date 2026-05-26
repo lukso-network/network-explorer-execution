@@ -963,6 +963,7 @@ defmodule Explorer.Chain.SmartContract do
       new_contract
       |> __MODULE__.changeset(attrs)
       |> Changeset.put_change(:external_libraries, external_libraries)
+      |> unique_constraint(:address_hash, name: :smart_contracts_pkey)
 
     smart_contract_additional_sources_changesets =
       if secondary_sources do
